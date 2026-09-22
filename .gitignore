@@ -20,3 +20,9 @@ data/
 # 测试/缓存
 .pytest_cache/
 .mypy_cache/
+
+# 前端构建产物与依赖（由 frontend/ 构建产出，不入库）
+app/static/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/

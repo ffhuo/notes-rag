@@ -1,0 +1,32 @@
+# deploy/nginx.conf.example — 反向代理 + TLS 终止（置于 notes-rag 之前）
+# 用法：将本文件作为 nginx server 块，证书放入对应路径；与 docker-compose 的 nginx 服务配合。
+# 详见 docs/design.md §15.4（远程访问安全）。
+server {
+    listen 80;
+    server_name rag.example.com;
+    # 全站跳转 HTTPS
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name rag.example.com;
+
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+
+    # 反向代理到应用（同 compose 网络内服务名）
+    location / {
+        proxy_pass http://notes-rag:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # SSE 流式（/api/v1/chat）需关闭缓冲、保持长连接
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+    }
+}

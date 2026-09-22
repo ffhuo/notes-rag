@@ -12,11 +12,11 @@ app/mcp/server.py —— 将本项目的检索 / 问答能力封装为 MCP serve
 - mcp：FastMCP / Server 实例，注册下方工具。
 - search_notes(query, top_k, vault_id)：→ retrieval_service.retrieve
 - ask_notes(question, vault_id, conversation_id)：→ chat_service.stream（流式）
-- ingest_vault(vault_path, reindex)：→ ingest_service.scan
+- ingest_vault(vault_sources?, reindex?)：→ ingest_service.scan（支持本地/远程多源，见 §15.3）
 - list_vaults()：→ config / note_repo
 - main()：stdio / http 两种传输入口（见文件底部）
 
-个人用户注意：stdio 零端口最省事；http 模式仅监听 127.0.0.1，绝不暴露 0.0.0.0（见 §14.7）。
+运行模式：stdio 零端口最省事（本机 / 本地 agent）；http 模式监听地址由 HOST 决定——本地 127.0.0.1，服务端部署 0.0.0.0 但须置于反向代理 + API Key + HTTPS 之后（见 §14.7 / §15.4）。
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from app.services import chat_service, ingest_service, retrieval_service
 # ──────────────────────────────────────────────
 # MCP server 实例（stdio / http 共用）
 # ──────────────────────────────────────────────
-mcp = FastMCP("rag-as-api")
+mcp = FastMCP("notes-rag")
 
 
 # ──────────────────────────────────────────────

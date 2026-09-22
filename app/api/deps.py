@@ -17,12 +17,16 @@
 """
 from app.core.config import Settings  # 或 settings
 from app.core.database import get_session
-from app.core.security import get_current_api_key
+from app.core.security import get_current_api_key, get_current_user
 from app.rag.vectorstore import VectorStore
 
 
 def get_settings() -> Settings:
     ...
+
+
+# 当前用户依赖：供 vault/auth 路由注入，返回 user_id（单用户为 "default"）
+get_current_user_id = get_current_user
 
 
 def get_vector_store() -> VectorStore:

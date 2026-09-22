@@ -1,0 +1,13 @@
+# .dockerignore — 避免把密钥 / 运行时数据 / 虚拟环境打进镜像
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.env
+data/
+logs/
+tests/
+*.md
+docker-compose.yml

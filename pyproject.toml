@@ -1,14 +1,14 @@
 # ─────────────────────────────────────────────────────────────
-# rag-as-api —— 使用 uv 管理依赖与虚拟环境
+# notes-rag —— 使用 uv 管理依赖与虚拟环境
 # uv：Rust 实现的极速 Python 包管理器，遵循标准 PEP 621 pyproject 格式。
 # 本机 Python 命令约定：统一用 `python`（3.12）。
 # 常用命令见 README「环境准备（uv）」。
 # ─────────────────────────────────────────────────────────────
 
 [project]
-name = "rag-as-api"
+name = "notes-rag"
 version = "0.1.0"
-description = "知识库智能后端（RAG-as-API）：把 Markdown 笔记变成可检索、可问答的 FastAPI 服务"
+description = "知识库智能后端（RAG 应用）：把 Markdown 笔记变成可检索、可问答的 FastAPI 服务"
 readme = "README.md"
 requires-python = ">=3.12"
 # 运行时依赖（与 docs/design.md 技术选型一致）
@@ -24,6 +24,16 @@ dependencies = [
     "openai>=1.30",
     # Agent 接入（MCP server，见 docs/design.md §14）；启用前需 `uv sync`
     "mcp>=1.2",
+    "loguru>=0.7",
+]
+
+# 可选依赖：多格式文档解析（design.md §16.1）。主线 `uv sync` 不安装；
+# 需要 PDF/Word/Excel 时：`uv add pymupdf python-docx openpyxl` 或 `uv sync --extra docs`
+[project.optional-dependencies]
+docs = [
+    "pymupdf>=1.24",       # PDF 解析（app/parsers/pdf.py）
+    "python-docx>=1.1",    # Word(.docx) 解析（app/parsers/docx.py）
+    "openpyxl>=3.1",       # Excel(.xlsx) 解析（app/parsers/excel.py）
 ]
 
 # PEP 735 开发依赖组（不参与生产部署）

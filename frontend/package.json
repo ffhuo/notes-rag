@@ -1,0 +1,20 @@
+{
+  "name": "notes-rag-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "notes-rag 前端：Vault 管理 / 检索 / 问答 SPA（Vue 3 + Vite）。构建产物输出到 ../app/static，由后端 FastAPI 托管。",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.4.0",
+    "vue-router": "^4.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "vite": "^5.2.0"
+  }
+}

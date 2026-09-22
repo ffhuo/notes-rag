@@ -1,0 +1,5 @@
+# 项目级 uv 配置：锁定阿里云 PyPI 镜像，避免被全局 UV_DEFAULT_INDEX（如清华镜像）覆盖，
+# 防止镜像 403 导致的依赖下载失败。
+[[index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true
