@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────────
+# rag-as-api —— 使用 uv 管理依赖与虚拟环境
+# uv：Rust 实现的极速 Python 包管理器，遵循标准 PEP 621 pyproject 格式。
+# 本机 Python 命令约定：统一用 `python`（3.12）。
+# 常用命令见 README「环境准备（uv）」。
+# ─────────────────────────────────────────────────────────────
+
+[project]
+name = "rag-as-api"
+version = "0.1.0"
+description = "知识库智能后端（RAG-as-API）：把 Markdown 笔记变成可检索、可问答的 FastAPI 服务"
+readme = "README.md"
+requires-python = ">=3.12"
+# 运行时依赖（与 docs/design.md 技术选型一致）
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "python-dotenv>=1.0",
+    "sqlalchemy>=2.0",
+    "aiosqlite>=0.19",
+    "chromadb>=0.5",
+    "openai>=1.30",
+    # Agent 接入（MCP server，见 docs/design.md §14）；启用前需 `uv sync`
+    "mcp>=1.2",
+]
+
+# PEP 735 开发依赖组（不参与生产部署）
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "tenacity>=8.2",
+    "rich>=13.0",
+]
+
+[tool.uv]
+# 本项目是应用而非可发布库，禁止 uv 将自身 editable 安装为包
+package = false
+# 虚拟环境默认建在项目内 ./.venv，便于 IDE / 本机命令统一管理
+# 本机为 Intel Mac（darwin x86_64）：锁定解析到当前平台，避免选到无 x86_64 wheel 的依赖
+# （如 onnxruntime 新版仅提供 arm64/linux/win wheel，会导致 uv sync 安装失败）
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'x86_64'",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
