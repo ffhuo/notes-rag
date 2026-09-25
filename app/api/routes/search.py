@@ -11,7 +11,7 @@
 
 关联方案：docs/design.md §4.2（Search 时序）、§5（API 设计）、§18（多模型管理）。
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.api.deps import get_current_api_key
 from app.models.schemas import SearchRequest, SearchResponse
@@ -21,5 +21,5 @@ router = APIRouter(prefix="/api/v1", tags=["search"])
 
 
 @router.post("/search", response_model=SearchResponse)
-async def search(req: SearchRequest, _: str = get_current_api_key()) -> SearchResponse:
+async def search(req: SearchRequest, _: str = Depends(get_current_api_key)) -> SearchResponse:
     ...

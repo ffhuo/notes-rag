@@ -5,7 +5,7 @@
 - 把 ModelProfile 解析成 ModelRuntime（应用端点/密钥回退），rag 层只认 ModelRuntime
 - 构造 OpenAI 兼容客户端（AsyncOpenAI），供 embedder / llm_client 使用
 - **embedding 一致性守卫**：检索必须用「建该 vault 索引时那个」embedding，换模型需先重建索引（§18.2）
-- 首次启动时把 .env 的 LLM_* / EMBED_* / MODEL_PROFILES 作为种子写入 model_profiles 表（§18.4）
+- 表空时用 .env 的 LLM_* / EMBED_* 构造临时运行时配置（runtime_from_settings 兜底）
 
 主要函数：
 - async def resolve_profile(session, settings, kind, ref=None, user_id="default") -> ModelProfile
@@ -15,7 +15,6 @@
 - def build_client(runtime) -> AsyncOpenAI
 - def assert_embed_compatible(vault, profile) -> None：不一致则抛 EmbedModelMismatch
 - def collection_name(vault_id, profile_id) -> str：向量集合命名（模型隔离，见 §18.2）
-- async def seed_from_env(session, settings) -> list[ModelProfile]：表空时注入，非空则跳过
 - async def list_models / create_model / update_model / delete_model / set_default：CRUD 编排
 - async def test_connection(runtime) -> ModelTestResult：连通性测试（embed 试 1 条，llm 试极短对话）
 
@@ -102,18 +101,9 @@ def assert_embed_compatible(vault: Vault, profile: ModelProfile) -> None:
     ...
 
 
-async def seed_from_env(session, settings: Settings) -> list[ModelProfile]:
-    """种子注入：model_profiles 表为空时才写入（与 vault 种子同规则，§18.4）。
-
-    - 空表 → 写入 settings.bootstrap_profiles()（llm/embed 各一个 default + MODEL_PROFILES 额外项）
-    - 非空 → 直接返回空列表，**不覆盖用户已在前端改过的配置**
-    - 无头模式（UI_ENABLED=false）由调用方决定是否每次启动对账（按 name 查重后 upsert）
-    """
-    ...
-
-
 async def list_models(session, user_id: str, kind: str | None = None) -> list[ModelProfileOut]:
-    ...
+    """列出当前用户的模型配置（可按 kind=llm|embed 过滤）。"""
+    return model_repo.list_profiles(session, user_id, kind, True)
 
 
 async def create_model(

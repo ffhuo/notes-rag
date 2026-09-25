@@ -1,39 +1,57 @@
-"""业务·摄取 — 编排笔记/文档索引全流程（功能需求 FR1，docs/design.md §4.1 / §16）。
+"""业务·摄取原语 — 单个文件「怎么进 / 怎么出」索引（功能需求 FR1）。
+
+**本模块在一期已降级为「原语层」**：不再承担 vault 级别的编排（对账、护栏、dry_run、
+进度、取消），那些全部上移到 `sync_service`（对账层）与 `run_service`（作业层）。
+
+三层职责（不可越界，见 M03 §5.6）：
+    作业层 run_service      何时跑、跑到哪了、能不能停
+    对账层 sync_service     要动哪些文件、允不允许删
+    原语层 ingest_service   单个文件怎么进 / 出索引     ← 本模块
 
 能力：
-- 扫描 vault 来源下的文件（递归），应用过滤（排除目录 / 扩展名白名单 / include-exclude glob，见 §16.3）
-- 按扩展名路由解析器（app/parsers/*）得到纯文本 → 分块（chunker）→ 嵌入（embedder）
+- 单文件管道：路由解析器（app/parsers/*）→ 分块（chunker）→ 嵌入（embedder）
   → 写向量库（vectorstore）→ 写元数据（note_repo）
-- 支持全量重建（rebuild）与增量跳过未变更文件
-- 统计扫描数与索引分块数，供接口返回
-- index_vault：面向「前端管理的 vault 实体」，先由 vault_service 解析出本地路径，再复用 scan 的索引逻辑
-- **embedding 模型绑定**：索引时确定 embed_runtime，写入 chunks.embed_profile_id 与
-  vault.embed_indexed_profiles，向量落在 collection_name(vault_id, profile_id)（见 §18.2）
+- 文件级替换语义：索引前先清掉该文件的旧分块行与旧向量
+- **embedding 模型绑定**：写入 chunks.embed_profile_id；向量落在
+  collection_name(vault_id, profile_id)（见 M08 §2）
 
-主要函数：
-- async def scan(vault_sources, rebuild, filters, embed_runtime=None) -> IngestResponse: 编排整个 ingest 流程（兼容命令行 / MCP 直接传 vault_sources）
-- async def index_vault(vault, local_path, rebuild, filters, embed_runtime=None) -> IngestResponse: 由 vault 实体触发索引（前端 vaults + reindex 走此，见 §17.2）
-      embed_runtime 由 model_service.to_runtime(resolve_profile(kind='embed')) 解析后传入；
-      索引完成后需把 profile.id 追加进 vault.embed_indexed_profiles 并置为 vault.embed_profile_id
+主要函数（全部是文件级原语，供 sync_service 与 doctor 复用）：
+- async def index_file(vault, local_path, rel_path, embed_runtime) -> int
+      索引单个文件，返回分块数。**实现即「文件级替换」**：先 drop_file 清旧 chunks 行
+      与旧向量，再解析 → 分块 → 嵌入 → 写入。
+      **不可**改成「按 chunk_idx upsert」—— 文件变短时会留下幽灵向量（M03 ADR-8），
+      那是检索会召回已删除内容的最高危 bug。
+- async def drop_file(vault, note_id) -> None
+      删除某文件的 chunks 行与对应向量（文件被删除 / 被过滤规则移出范围时用）。
+- async def move_file(vault, note_id, new_rel_path) -> None
+      内容未变、仅路径变化：只更新 notes.file_path 与 Chroma 的 metadatas.file_path。
+      不重新分块、不重新 embedding —— 同一文本 + 同一模型的向量在数学上完全等价。
 
-关联方案：docs/design.md §4.1（Ingest 时序）、§9（Phase 1）、§16（多格式与过滤）、§17.2（vault 管理）、§18（多模型）。
+单文件管道的完整规格（解析器路由 / 分块参数 / 失败重试 / 空文件处理）见 M03 §5.2–§5.5。
+
+关联方案：M03 §4.1（数据流）/ §5.6（三层职责）/ §5.8–§5.12（变更管理，本模块是被调用方）；
+         docs/design.md §16（多格式与过滤）、§18（多模型）。
 """
 from pathlib import Path
-from typing import Optional
 
 from app.models.orm import Vault
-from app.models.schemas import IngestFilters, IngestResponse, ModelRuntime
+from app.models.schemas import ModelRuntime
 
 
-async def scan(vault_sources: list[str], rebuild: bool = False,
-               filters: "IngestFilters | None" = None,
-               embed_runtime: "ModelRuntime | None" = None) -> IngestResponse:
+async def index_file(vault: Vault, local_path: Path, rel_path: str,
+                     embed_runtime: "ModelRuntime | None" = None) -> int:
+    """索引单个文件，返回分块数。实现 = 文件级替换（先 drop_file 再写新的）。"""
     ...
 
 
-async def index_vault(vault: Vault, local_path: Path, rebuild: bool = False,
-                      filters: "Optional[IngestFilters]" = None,
-                      embed_runtime: "ModelRuntime | None" = None) -> IngestResponse:
-    # 复用 scan 的内部索引逻辑：local_path 即 vault 解析后的本地目录
+async def drop_file(vault: Vault, note_id: int) -> None:
+    """删除某文件的 chunks 行与对应向量（文件被删除 / 被过滤规则移出索引范围时用）。"""
     ...
 
+
+async def move_file(vault: Vault, note_id: int, new_rel_path: str) -> None:
+    """内容未变、仅路径变化：只更新 notes.file_path 与 Chroma metadatas.file_path。
+
+    不重新分块、不重新 embedding（同一文本 + 同一模型的向量在数学上完全等价）。
+    """
+    ...

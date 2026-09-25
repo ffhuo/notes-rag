@@ -13,14 +13,37 @@
 关联方案：docs/design.md §17.3（多用户）、§8（配置与安全）。
 """
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from loguru import logger
 
 from app.api.deps import get_current_user_id
+from app.core.config import settings
 from app.core.database import get_session
-from app.core.security import create_access_token, decode_jwt, hash_password, verify_password
+from app.core.security import create_access_token, hash_password, verify_password
+from app.models.orm import User
 from app.models.schemas import LoginRequest, Token, UserCreate, UserOut
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+
+def _require_multiuser() -> None:
+    """多用户模式未开启时直接 403。"""
+    if not settings.enable_multiuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="多用户模式未启用",
+        )
+
+
+def _require_jwt_secret() -> str:
+    """JWT 密钥未配置时直接 500。"""
+    if not settings.jwt_secret:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="服务端未配置 JWT_SECRET",
+        )
+    return settings.jwt_secret
 
 
 @router.post("/register", response_model=UserOut)
@@ -28,8 +51,31 @@ async def register(
     payload: UserCreate,
     session: AsyncSession = Depends(get_session),
 ):
-    # 1) 查重 username → 2) hash_password → 3) vault_repo.create_user
-    ...
+    """注册新账号（仅多用户模式）。"""
+    _require_multiuser()
+    _require_jwt_secret()
+
+    # 查重 username
+    existing = await session.execute(
+        select(User).where(User.username == payload.username)
+    )
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"用户名已存在: {payload.username}",
+        )
+
+    # 创建用户（uid 自动生成）
+    user = User(
+        username=payload.username,
+        password_hash=hash_password(payload.password),
+    )
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+
+    logger.info("用户注册", uid=user.uid, username=user.username)
+    return UserOut(uid=user.uid, username=user.username, is_admin=user.is_admin)
 
 
 @router.post("/login", response_model=Token)
@@ -37,11 +83,46 @@ async def login(
     payload: LoginRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    # 1) get_user_by_username → 2) verify_password → 3) create_access_token(user_id)
-    ...
+    """登录签发 JWT（仅多用户模式）。"""
+    _require_multiuser()
+    secret = _require_jwt_secret()
+
+    result = await session.execute(
+        select(User).where(User.username == payload.username)
+    )
+    user = result.scalar_one_or_none()
+    if user is None or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户名或密码错误",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = create_access_token(user.uid, secret)
+    logger.info("用户登录", uid=user.uid, username=user.username)
+    return Token(access_token=token)
 
 
 @router.get("/me", response_model=UserOut)
-async def me(user_id: str = Depends(get_current_user_id)):
-    # 返回当前用户（单用户模式 user_id="default"，可返回合成用户）
-    ...
+async def me(
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """返回当前用户信息。
+
+    单用户模式返回合成用户（uid="default", username="default"）；
+    多用户模式从数据库按 uid 查找。
+    """
+    if user_id == "default":
+        return UserOut(uid="default", username="default", is_admin=True)
+
+    # 多用户模式：user_id 是 JWT sub（user.uid）
+    result = await session.execute(select(User).where(User.uid == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户不存在",
+        )
+
+    return UserOut(uid=user.uid, username=user.username, is_admin=user.is_admin)

@@ -8,12 +8,14 @@
 主要组件：
 - create_database_engine(): 初始化引擎与会话工厂（lifespan 启动时调用）
 - get_session(): FastAPI 依赖，yield 会话
+- session_scope(): 独立会话上下文，供**请求作用域之外**的后台协程使用（作业层）
 - init_db(): 依据 ORM 模型建表
 - close_database_engine(): 释放引擎连接（lifespan 关闭时调用）
 
 关联方案：docs/design.md §2（core/database.py）、§6（数据模型）。
 """
 import os
+from contextlib import asynccontextmanager
 from typing import Optional, AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
@@ -67,6 +69,26 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
     async with _async_session_factory() as session:
         yield session
+
+
+@asynccontextmanager
+async def session_scope() -> AsyncGenerator[AsyncSession, None]:
+    """独立会话上下文：供**请求作用域之外**的后台协程使用（作业层 run_service）。
+
+    与 get_session（FastAPI 依赖）的区别：不绑定请求生命周期，由协程自己开/关。
+    后台任务是长跑协程，跨阶段推进；若复用请求会话，会在请求结束的那一刻被关闭。
+    默认 commit，异常 rollback（调用方无需自己管事务边界）。
+    """
+    if _async_session_factory is None:
+        await create_database_engine()
+
+    async with _async_session_factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 async def init_db() -> None:

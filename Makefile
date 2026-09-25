@@ -14,10 +14,7 @@ UV_INDEX ?= https://mirrors.aliyun.com/pypi/simple/
 # export 后所有 target 的 uv 调用（包括 uv run 的隐式 sync）都会继承此源
 export UV_DEFAULT_INDEX = $(UV_INDEX)
 
-# 摄取接口所需的环境变量（运行 make ingest 前请先 export）
-API_KEY ?=
-VAULT_SOURCES ?=
-VAULT_PATH ?=            # 兼容旧字段，等价于 local:<path>
+# make ingest 的传参变量（拼进 API 请求体，非应用配置项；vault 配置见 .env.example 说明）
 IMAGE ?= notes-rag
 TAG ?= latest
 
@@ -33,7 +30,6 @@ help:  ## 显示本帮助
 	@echo "  make run            直接运行（python -m app.main）"
 	@echo "  make test           运行 pytest"
 	@echo "  make init-db        初始化 SQLite 表"
-	@echo "  make ingest         触发 /ingest 摄取 vault（需先 make dev；API_KEY/VAULT_SOURCES 用环境变量传入）"
 	@echo "  make clean          清理运行时数据与 Python 缓存"
 	@echo "  make shell          进入 venv 的 python REPL"
 	@echo "  make docker-build   构建 Docker 镜像（deploy/Dockerfile）"
@@ -60,17 +56,6 @@ test:  ## 运行测试
 
 init-db:  ## 初始化数据库表（scripts/init_db.py）
 	$(UV) run python scripts/init_db.py
-
-# 摄取需要服务在跑；API_KEY 与 VAULT_SOURCES 通过环境变量传入，例如：
-#   export API_KEY=xxx VAULT_SOURCES="local:/path/to/vault,git:https://.../vault.git" && make ingest
-ingest:  ## 调用 /api/v1/ingest 摄取 vault
-	@if [ -z "$(VAULT_SOURCES)" ] && [ -n "$(VAULT_PATH)" ]; then \
-		VAULT_SOURCES="local:$(VAULT_PATH)"; \
-	fi; \
-	curl -s -X POST http://127.0.0.1:8000/api/v1/ingest \
-		-H "X-API-Key: $(API_KEY)" \
-		-H "Content-Type: application/json" \
-		-d "{\"vault_sources\":[\"$${VAULT_SOURCES}\"],\"rebuild\":false}"
 
 clean:  ## 清理运行时数据与 Python 缓存
 	rm -rf data/chroma data/*.db data/*.sqlite data/*.sqlite3

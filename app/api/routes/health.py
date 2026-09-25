@@ -16,4 +16,5 @@ router = APIRouter(tags=["health"])
 
 @router.get("/healthz")
 async def health() -> dict:
-    ...
+    """健康检查，返回 {"status": "ok"}。"""
+    return {"status": "ok"}

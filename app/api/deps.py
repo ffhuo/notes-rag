@@ -15,19 +15,21 @@
 
 关联方案：docs/design.md §1（依赖原则）、§2（api/deps.py）。
 """
-from app.core.config import Settings  # 或 settings
+from app.core.config import Settings, settings
 from app.core.database import get_session
 from app.core.security import get_current_api_key, get_current_user
 from app.rag.vectorstore import VectorStore
-
-
-def get_settings() -> Settings:
-    ...
-
 
 # 当前用户依赖：供 vault/auth 路由注入，返回 user_id（单用户为 "default"）
 get_current_user_id = get_current_user
 
 
+def get_settings() -> Settings:
+    """注入配置单例。"""
+    return settings
+
+
 def get_vector_store() -> VectorStore:
+    """懒加载持久化向量库（TODO: 按 vault+profile 分集合）。"""
     ...
+

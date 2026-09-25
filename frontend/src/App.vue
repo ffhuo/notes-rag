@@ -8,6 +8,7 @@ import { RouterLink, RouterView } from 'vue-router'
       <strong class="brand">notes-rag</strong>
       <nav>
         <RouterLink to="/vaults">Vaults</RouterLink>
+        <RouterLink to="/tasks">任务</RouterLink>
         <RouterLink to="/search">Search</RouterLink>
         <RouterLink to="/chat">Chat</RouterLink>
         <RouterLink to="/models">Models</RouterLink>

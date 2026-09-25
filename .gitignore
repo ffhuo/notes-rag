@@ -11,6 +11,8 @@ env/
 
 # 运行时数据（向量库 + sqlite）
 data/
+logs/
+fixtures/
 
 # 编辑/系统
 .DS_Store

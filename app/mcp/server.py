@@ -12,7 +12,9 @@ app/mcp/server.py —— 将本项目的检索 / 问答能力封装为 MCP serve
 - mcp：FastMCP / Server 实例，注册下方工具。
 - search_notes(query, top_k, vault_id)：→ retrieval_service.retrieve
 - ask_notes(question, vault_id, conversation_id)：→ chat_service.stream（流式）
-- ingest_vault(vault_sources?, reindex?)：→ ingest_service.scan（支持本地/远程多源，见 §15.3）
+- ingest_vault(vault_sources?, reindex?)：→ vault_service.submit_sync（**提交异步作业**，返回 run_id）
+  ⚠ 一期暂缓：MCP 工具是「请求-响应」模型，而本项目索引是全异步作业。
+  agent 侧的适配（轮询 / 内部阻塞 / 只暴露只读工具）尚未定案，见 M09 §5.6 与 §12 未决项。
 - list_vaults()：→ config / note_repo
 - main()：stdio / http 两种传输入口（见文件底部）
 
@@ -76,13 +78,19 @@ async def ask_notes(
 
 @mcp.tool()
 async def ingest_vault(vault_path: str | None = None, reindex: bool = False) -> dict:
-    """扫描并索引指定 vault（或默认 vault），返回统计。
+    """提交一次索引作业（**异步**），立即返回 run_id 与初始状态。
 
     参数:
-        vault_path: vault 路径；省略则用配置中的默认 vault
-        reindex: True 时清空旧索引重建
+        vault_path: vault 路径（vault 来源通过 API/前端管理）
+        reindex: True 时提交 mode="rebuild" 的全量重建作业，否则为增量对账
+
+    返回: {run_id, vault_id, status} —— **不代表已完成**；进度需另行查询作业详情。
+
+    设计说明：REST 侧写入类端点一律 202，MCP 工具同样不应假装同步完成。
+    agent 如何跟进（轮询 / 内部阻塞等待 / 干脆只暴露只读工具）见 M09 §5.6，一期暂缓实现。
     """
-    # TODO: 调用 ingest_service.scan(vault_path or settings.vault_path, reindex)
+    # TODO: vault_service.submit_sync(vault, mode="rebuild" if reindex else "sync", trigger="mcp")
+    # 同 vault 已有作业在跑 → run_service.AlreadyRunning（不排队），返回现有 run_id 供跟进
     ...
 
 

@@ -44,7 +44,8 @@ async def list_models(
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
 ):
-    ...
+    """列出当前用户的模型配置（可按 kind=llm|embed 过滤）。"""
+    return model_service.list_models(user_id, kind)
 
 
 @router.post("", response_model=ModelProfileOut, status_code=status.HTTP_201_CREATED)

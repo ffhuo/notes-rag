@@ -2,9 +2,9 @@
 
 > 知识库智能应用（RAG）—— 把 Markdown / 纯文本笔记（Obsidian vault 或任意目录）变成可检索、可问答的 **Web 应用**（后端 API + 前端页面）。
 > vault 在前端页面配置（添加本地目录 / 上传 vault 压缩包），是否支持多用户由配置开关决定（默认单用户）。
-> 可配置**多个 LLM / 多个 Embedding**并在使用时选择：LLM 每次请求可换；Embedding 与索引绑定，换模型需重建索引（见 `docs/design.md` §18）。
-> 一期支持 `.md` / `.txt`；PDF / Word / Excel 等多格式解析与文件/文件夹过滤已在设计层预留（见 `docs/design.md` §16）。
-> 本项目提供分层架构骨架与完整方案文档；业务逻辑可按 `docs/design.md` 手写实现，适合练手，也适合作为自托管知识库服务直接部署。
+> 可配置**多个 LLM / 多个 Embedding**并在使用时选择：LLM 每次请求可换；Embedding 与索引绑定，换模型需重建索引（详见设计文档库 **M08 多模型管理**）。
+> 一期支持 `.md` / `.txt`；PDF / Word / Excel 等多格式解析与文件/文件夹过滤已在设计层预留（详见 **M11 多格式解析与过滤**）。
+> 本项目提供分层架构骨架与完整方案文档：`docs/design.md` 是**大纲与基础介绍**（架构 / 目录 / 选型 / 总览 / 里程碑 / 全局约定 / 模块索引），**模块级详细方案**在 `personal-lib/00-Projects/notes-rag-design/` 下按实现优先级排列。业务逻辑可按这些文档手写实现，适合练手，也适合作为自托管知识库服务直接部署。
 
 ## 交互 Demo（不写代码也能看到全貌）
 
@@ -15,7 +15,7 @@ make demo      # 直接打开 demo/index.html
 # 或：open demo/index.html
 ```
 
-> 后端业务逻辑目前仍为 `...` 占位（按 design.md Phase 0 → 4 手写），Demo 用于对齐设计与交互预期，不代表真实后端行为。
+> 后端业务逻辑目前仍为 `...` 占位（按 `docs/design.md` §9 的 Phase 0 → 9 手写），Demo 用于对齐设计与交互预期，不代表真实后端行为。
 
 ## 技术栈
 
@@ -24,7 +24,7 @@ make demo      # 直接打开 demo/index.html
 - SQLAlchemy 2.0 (async) + aiosqlite（元数据 / 对话历史）
 - Chroma（本地持久化向量库）
 - openai SDK（兼容端点，可指向 Qwen / 任意 OpenAI 兼容服务）
-- **Vue 3 + Vite**（前端 SPA：Vault 管理 / 检索 / 问答，见 `docs/design.md` §17）
+- **Vue 3 + Vite**（前端 SPA：Vault 管理 / 检索 / 问答 / 模型管理，见设计文档库 M07 前端 SPA）
 - **uv**（Rust 实现的极速 Python 包管理器，遵循标准 PEP 621）
 
 ## 目录结构
@@ -32,23 +32,24 @@ make demo      # 直接打开 demo/index.html
 ```
 notes-rag/
 ├── docs/
-│   └── design.md            # 开发方案设计（架构、API、数据模型、RAG 管线、手写 TODO 地图）
-│   # 补充设计文档（需求清单/库选型/RAG 详解）已迁至 personal-lib/00-Projects/notes-rag-design/
+│   └── design.md            # 开发方案设计·大纲（架构 / 目录 / 选型 / 总览 / 里程碑 / 全局约定 / 模块索引）
+│   # 模块级详细设计（M01–M11 + 附录 A）与需求/选型/RAG 详解：
+│   # personal-lib/00-Projects/notes-rag-design/（modules/ 下按实现优先级排列）
 ├── app/
 │   ├── main.py              # FastAPI 入口（你手写）
 │   ├── api/                 # 路由层（ingest / search / chat / vaults / auth / models）
 │   ├── core/                # config / security（API Key + JWT）/ database
-│   ├── services/            # 业务编排（ingest / retrieval / chat / vault / model）
-│   ├── repositories/        # 数据访问（note / conversation / vault / model）
-│   ├── models/              # Pydantic schemas + ORM（users / vaults / model_profiles / notes / chunks / conversations / messages）
+│   ├── services/            # 业务分层（run = 作业层 / sync = 对账层 / ingest = 原语层 / retrieval / chat / vault / model / watcher）
+│   ├── repositories/        # 数据访问（note / conversation / vault / model / sync_runs 作业记录）
+│   ├── models/              # Pydantic schemas + ORM（users / vaults / model_profiles / notes / chunks / conversations / messages / sync_runs）
 │   ├── rag/                 # chunker / embedder / vectorstore / llm_client
-│   ├── parsers/             # 多格式解析层（md/txt 一期，pdf/docx/xlsx 预留，见 §16）
-│   ├── mcp/                 # MCP server（Agent 接入，见 design.md §14）
+│   ├── parsers/             # 多格式解析层（md/txt 一期，pdf/docx/xlsx 预留，见 M03 / M11）
+│   ├── mcp/                 # MCP server（Agent 接入，见 M09）
 │   └── static/              # 前端构建产物（由 frontend/ 构建产出，gitignore）
-├── frontend/                # 新增：Vue 3 + Vite SPA 源码（Vault 管理 / 检索 / 问答，见 §17）
+├── frontend/                # 新增：Vue 3 + Vite SPA 源码（Vault 管理 / 检索 / 问答，见 M07）
 ├── tests/                   # 单测 / 集成测试
 ├── scripts/                 # 建表等脚本
-├── deploy/                  # 部署模板（多阶段 Docker / compose / nginx，见 docs/design.md §15 / §17.6）
+├── deploy/                  # 部署模板（多阶段 Docker / compose / nginx，见 M10 部署方案 / M07 前端构建）
 │   ├── Dockerfile
 │   ├── docker-compose.yml
 │   └── nginx.conf.example
@@ -79,7 +80,7 @@ uv sync --python 3.12
 # 2. 配置环境变量
 cp .env.example .env        # 填入 LLM_API_KEY / VAULT_PATH 等
 
-# 3. 按 docs/design.md 的 Phase 0 → Phase 4 逐步手写代码
+# 3. 按 docs/design.md §9 的 Phase 0 → Phase 9 逐步手写代码
 ```
 
 > 当前 `.venv` 已在本机用 `uv sync` 安装完成并验证（`uv run python -c "import fastapi, chromadb"` 通过）。
@@ -118,13 +119,15 @@ docker run -d --name notes-rag -p 8000:8000 \
   -v $(pwd)/data:/app/data --env-file .env -e HOST=0.0.0.0 notes-rag
 ```
 
-- 远程访问必须经**反向代理 + HTTPS + API Key**（详见 `docs/design.md` §15.4）。
-- 数据卷、vault 远程导入、Nginx 反代模板见 `docs/design.md` §15。
-- Docker 镜像为**多阶段构建**：先构建前端（node）再打 Python 镜像，前端静态由后端同源托管（见 §17.6）。
+- 远程访问必须经**反向代理 + HTTPS + API Key**（详见 M10 部署方案的远程访问强制检查单）。
+- 数据卷、vault 远程导入、Nginx 反代模板见 M10 部署方案。
+- Docker 镜像为**多阶段构建**：先构建前端（node）再打 Python 镜像，前端静态由后端同源托管（见 M07 前端 SPA）。
 
 ### 前端页面（Vue 3 + Vite SPA）
 
-前端源码在 `frontend/`，提供 **Vault 管理 / 检索 / 问答** 三个页面（见 `docs/design.md` §17.1）。
+前端源码在 `frontend/`，提供 **Vault 管理 / 任务与进度 / 检索 / 问答 / 模型管理 / 登录** 页面（见 M07 前端 SPA）。
+其中「任务」页（`/tasks`）是异步索引作业的观察入口：进度条会随阶段自适应（`scan` 阶段总量未知时显示滚动条而非假百分比）、
+可按 vault / 状态筛选、可展开看同步计划与失败清单、可随时取消。
 
 ```bash
 # 开发联调（前后端分离）：Vite dev 代理 /api → 后端 :8000
@@ -136,17 +139,27 @@ make frontend-build
 # 之后正常起后端即可访问 http://127.0.0.1:8000/
 ```
 
-### Vault 配置（前端管理）
+### Vault 配置与索引作业（前端管理）
 
-vault 不再只靠 `.env`：在前端「Vaults」页可**添加本地目录**（填绝对路径）或**上传 vault 压缩包（.zip）**，落 `vaults` 表；
-对每个 vault 可「重建索引」。`.env` 的 `VAULT_SOURCES` 作为**系统种子 vault**（首次启动写入），与前端的 vault 合并生效（见 §17.2）。
+vault 完全由前端 / API 运行时配置，**不在 `.env` 中管理**：在前端「Vaults」页可**添加本地目录**（填绝对路径）或**上传 vault 压缩包（.zip）**，落 `vaults` 表。无前端时通过 `POST /api/v1/vaults` 或 CLI `make ingest`（一次性摄取）配置（见 M06 Vault 实体化与多用户鉴权）。
+
+**索引都是异步作业**（`POST /vaults/{id}/sync` / `/reindex` → `202 + run_id`）：
+
+- 提交后立即返回，**不等跑完**（全量重建 2–10 min，同步返回必撞网关超时）；进度在「任务」页（`/tasks`）实时看，
+  接口是 `GET /vaults/{id}/runs/{rid}`，前端 1s 轮询。
+- **同步**（增量对账）：日常用，只处理变化的文件，通常数秒。支持「预览变更」——提交 `dry_run` 作业，
+  作业停在 `plan_ready`，先看这次会动哪些文件再决定是否执行。
+- **重建索引**（全量）：换 embedding / 改分块参数 / 索引疑似损坏时才用。
+- 同一 vault 已有作业在跑时再次提交返回 **`409` + `existing_run_id`（不排队）**，前端会直接跳去那个任务的进度。
+- 作业可随时取消（`POST .../cancel`）：**协作式**，会在当前文件处理完后停止（文件级替换是幂等单元，停在边界天然一致）。
+- 状态七态，其中 `failed`（程序异常）/ `cancelled`（用户主动停止）/ `aborted`（进程崩溃残留）语义不同，排查时不可混淆。
 
 ### 多用户（可配置，默认关闭）
 
 `.env` 的 `ENABLE_MULTIUSER`（默认 `false`）：
 
 - **false（单用户）**：所有资源归 `user_id="default"`，接口用 `X-API-Key` 鉴权，前端无登录页（在设置填一次 API Key）。
-- **true（多用户）**：启用 `users` 表 + JWT（`JWT_SECRET` 必填），前端出现 Login 页；受保护接口同时接受 `X-API-Key` 与 `Bearer <JWT>`，vault / 对话按用户隔离（见 §17.3）。
+- **true（多用户）**：启用 `users` 表 + JWT（`JWT_SECRET` 必填），前端出现 Login 页；受保护接口同时接受 `X-API-Key` 与 `Bearer <JWT>`，vault / 对话按用户隔离（见 M06）。
 
 ### 多模型（多个 LLM / 多个 Embedding，使用时可选）
 
@@ -155,7 +168,7 @@ vault 不再只靠 `.env`：在前端「Vaults」页可**添加本地目录**（
 - **LLM**：无状态耦合，**每次请求都能换**（`ChatRequest.llm_profile`，前端问答页下拉选择）。
 - **Embedding**：与索引强绑定 —— 向量按 `v{vault}_m{profile}` 分集合，检索必须沿用建索引时那个模型；换模型 = 对该 vault 重新索引（`POST /vaults/{id}/reindex?embed_profile=...`）。接口**故意不暴露** `SearchRequest.embed_profile`，避免「能召回但全是噪声」的静默错误。
 
-详见 `docs/design.md` §18。
+详见设计文档库 M08 多模型管理。
 
 ## 依赖管理说明（uv）
 
@@ -182,7 +195,7 @@ vault 不再只靠 `.env`：在前端「Vaults」页可**添加本地目录**（
 | `make run` | 直接运行（`python -m app.main`） |
 | `make test` | 运行 pytest |
 | `make init-db` | 初始化 SQLite 表 |
-| `make ingest` | 触发 `/ingest` 摄取 vault（需先 `make dev`；`API_KEY` / `VAULT_SOURCES` 用环境变量传入，旧字段 `VAULT_PATH` 兼容） |
+| `make ingest` | 提交 `/ingest` 索引作业（需先 `make dev`；`API_KEY` / `VAULT_SOURCES` 用环境变量传入，拼进请求体，非 `.env` 配置项）。返回 `202 + run_id`，进度在「任务」页或 `GET /vaults/{id}/runs/{rid}` 查 |
 | `make clean` | 清理运行时数据与缓存 |
 | `make shell` | 进入 venv 的 python REPL |
 | `make frontend-install` | 安装前端依赖（`frontend/`） |
@@ -191,23 +204,30 @@ vault 不再只靠 `.env`：在前端「Vaults」页可**添加本地目录**（
 | `make docker-build` | 构建镜像（多阶段：含前端构建） |
 | `make docker-up` | 用 docker compose 启动 |
 
-> 查看全部命令：`make help`。`make ingest` 示例（本地 vault 用 `VAULT_SOURCES`，旧字段 `VAULT_PATH` 仍兼容）：
-> `export API_KEY=xxx VAULT_SOURCES="local:/path/to/vault,git:https://.../vault.git" && make ingest`
+> 查看全部命令：`make help`。`make ingest` 示例（`VAULT_SOURCES` 是传给 API 的请求体参数，非 `.env` 配置）：
+> `export API_KEY=xxx VAULT_SOURCES="local:/path/to/vault" && make ingest`
 
 ## Agent 接入（MCP / Skill）
 
-项目可被 agent（WorkBuddy、OpenClaw 等）当作知识库工具调用，方案见 [开发方案设计 §14](docs/design.md)：
+项目可被 agent（WorkBuddy、OpenClaw 等）当作知识库工具调用，方案见 **设计文档库 M09 Agent 接入（MCP / Skill）**：
 
 - **MCP server（主线）**：`app/mcp/server.py` 把检索 / 问答封装为标准 MCP tools，由 agent 通过 `mcp.json` 配置接入；支持 **stdio（本地零端口推荐）** 与 **Streamable HTTP（服务端部署后远程 agent 接入）** 两种传输。
 - **Skill（零部署补充）**：可额外提供 `skill/SKILL.md`，让任意支持 skill 的 agent 通过文本指令调 REST。
-- **两种运行形态**：本地模式数据全在本机、MCP 用 stdio 最省事；服务端部署（Docker）对外提供远程访问，MCP 走 Streamable HTTP + API Key（详见 `docs/design.md` §14.7 / §15）。启用前 `uv sync`（pyproject 已加 `mcp`）。
+- **两种运行形态**：本地模式数据全在本机、MCP 用 stdio 最省事；服务端部署（Docker）对外提供远程访问，MCP 走 Streamable HTTP + API Key（详见 M09 / M10 部署方案）。启用前 `uv sync`（pyproject 已加 `mcp`）。
 
 ## 文档
 
-- [需求清单与范围边界](../../personal-lib/00-Projects/notes-rag-design/requirements.md)
-- [开发方案设计](docs/design.md)
-- Agent 接入方案（MCP / Skill，对接 WorkBuddy / OpenClaw）见 [开发方案设计 §14](docs/design.md)
-- [基础库选型对比（log/config/database）](../../personal-lib/00-Projects/notes-rag-design/libs-comparison.md)
-- [向量库·Embedding 模型·RAG 检索方略详解](../../personal-lib/00-Projects/notes-rag-design/vector-rag-embedding.md)
+**代码仓库内**：
+
+- [开发方案设计·大纲](docs/design.md) —— 架构、目录结构、技术选型、数据流 / 接口 / 数据模型 / 配置总览、里程碑、全局约定、**模块文档索引（含原章节 → 模块文档映射表）**
 - [贡献指南](CONTRIBUTING.md)
 - 许可证：MIT（见 [LICENSE](LICENSE)）
+- 交互 Demo：[demo/index.html](demo/index.html)
+
+**设计文档库**（`personal-lib/00-Projects/notes-rag-design/`，模块级方案按实现优先级排列）：
+
+- [设计文档总览与索引](../../personal-lib/00-Projects/notes-rag-design/README.md)
+- [需求清单与范围边界](../../personal-lib/00-Projects/notes-rag-design/requirements.md)
+- [基础库选型对比（log/config/database）](../../personal-lib/00-Projects/notes-rag-design/libs-comparison.md)
+- [向量库·Embedding 模型·RAG 检索方略详解](../../personal-lib/00-Projects/notes-rag-design/vector-rag-embedding.md)
+- 模块文档 `modules/`：`01` 基础框架配置 · `02` 数据模型 · `03` 摄取管线 · `04` 检索 · `05` 问答 SSE · `06` Vault 与多用户 · `07` 前端 SPA · `08` 多模型 · `09` Agent MCP · `10` 部署 · `11` 多格式 · `appendix-a` 测试策略

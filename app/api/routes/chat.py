@@ -12,7 +12,7 @@
 
 关联方案：docs/design.md §4.3（Chat 时序）、§5（API 设计）、§18（多模型管理）。
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_current_api_key
@@ -23,5 +23,5 @@ router = APIRouter(prefix="/api/v1", tags=["chat"])
 
 
 @router.post("/chat")
-async def chat(req: ChatRequest, _: str = get_current_api_key()) -> StreamingResponse:
+async def chat(req: ChatRequest, _: str = Depends(get_current_api_key)) -> StreamingResponse:
     ...
