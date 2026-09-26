@@ -21,7 +21,7 @@
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.orm import ModelProfile
+from app.models import ModelProfile
 
 
 async def create_profile(

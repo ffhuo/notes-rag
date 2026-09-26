@@ -9,23 +9,23 @@
 
 主要函数：
 - async def resolve_profile(session, settings, kind, ref=None, user_id="default") -> ModelProfile
-      ref 可为 id 或 name；留空取该 kind 的默认项；都没配则回退 settings 构造的临时配置
-- def to_runtime(profile, settings) -> ModelRuntime：应用 base_url / api_key 回退
-- def runtime_from_settings(settings, kind) -> ModelRuntime：表为空时的兜底
+- def to_runtime(profile, settings) -> ModelRuntime
+- def runtime_from_settings(settings, kind) -> ModelRuntime
 - def build_client(runtime) -> AsyncOpenAI
-- def assert_embed_compatible(vault, profile) -> None：不一致则抛 EmbedModelMismatch
-- def collection_name(vault_id, profile_id) -> str：向量集合命名（模型隔离，见 §18.2）
+- def assert_embed_compatible(vault, profile) -> None
+- def collection_name(vault_id, profile_id) -> str
 - async def list_models / create_model / update_model / delete_model / set_default：CRUD 编排
-- async def test_connection(runtime) -> ModelTestResult：连通性测试（embed 试 1 条，llm 试极短对话）
+- async def test_connection(runtime) -> ModelTestResult
 
 关联方案：docs/design.md §18（多模型管理）、§7（RAG 管线）。
 """
 import json
+import time
 
-from openai import AsyncOpenAI
+from pydantic import SecretStr
 
 from app.core.config import Settings
-from app.models.orm import ModelProfile, Vault
+from app.models import ModelProfile, Vault
 from app.models.schemas import (
     ModelProfileCreate,
     ModelProfileOut,
@@ -33,8 +33,10 @@ from app.models.schemas import (
     ModelRuntime,
     ModelTestResult,
 )
+from app.rag.client import build_client  # noqa: F401  re-export，供其他 service 使用
+from app.rag.embedder import embed_one
+from app.rag.llm_client import chat
 from app.repositories import model_repo
-from pydantic import SecretStr
 
 
 class ModelNotFound(Exception):
@@ -63,6 +65,9 @@ def mask_api_key(key: str) -> str:
     return f"{key[:4]}****{key[-2:]}"
 
 
+# ===== 解析（三级：ref → 默认 → 兜底）=====
+
+
 async def resolve_profile(
     session,
     settings: Settings,
@@ -70,64 +75,220 @@ async def resolve_profile(
     ref: str | None = None,
     user_id: str = "default",
 ) -> ModelProfile:
-    # 1) 显式指定：ref 为纯数字按 id 找，否则按 name 找；找不到抛 ModelNotFound
-    # 2) 未指定：取该 (user_id, kind) 的 is_default 项
-    # 3) 再没有：取该 kind 第一条 enabled 项
-    # 4) 表为空：抛出 ModelNotConfigured，由调用方用 runtime_from_settings 兜底
-    ...
+    """解析「本次请求用哪个模型」。
+
+    1) 显式指定：ref 为纯数字按 id 找，否则按 name 找；找不到抛 ModelNotFound
+    2) 未指定：取该 (user_id, kind) 的 is_default 项
+    3) 再没有：取该 kind 第一条 enabled 项
+    4) 表为空：抛出 ModelNotConfigured，由调用方用 runtime_from_settings 兜底
+    """
+    if ref is not None:
+        # 显式指定：数字按 id，否则按 name
+        if ref.isdigit():
+            profile = await model_repo.get_profile(session, int(ref), user_id)
+        else:
+            profile = await model_repo.find_by_name(session, user_id, kind, ref)
+        if profile is None:
+            raise ModelNotFound(f"kind={kind} ref={ref} 找不到模型配置")
+        return profile
+
+    # 取默认项
+    profile = await model_repo.get_default(session, user_id, kind)
+    if profile is not None:
+        return profile
+
+    # 取第一条 enabled
+    profiles = await model_repo.list_profiles(session, user_id, kind, only_enabled=True)
+    if profiles:
+        return profiles[0]
+
+    raise ModelNotConfigured(f"kind={kind} 无任何可用模型配置")
 
 
 def to_runtime(profile: ModelProfile, settings: Settings) -> ModelRuntime:
     """profile → 运行时配置：base_url / api_key 留空时回退 .env 的同 kind 配置。"""
-    ...
+    if profile.kind == "embed":
+        fallback_url = settings.embed_base_url or settings.llm_base_url
+        fallback_key = settings.embed_api_key.get_secret_value() or settings.llm_api_key.get_secret_value()
+    else:
+        fallback_url = settings.llm_base_url
+        fallback_key = settings.llm_api_key.get_secret_value()
+
+    params = {}
+    if profile.params_json and profile.params_json != "{}":
+        try:
+            params = json.loads(profile.params_json)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return ModelRuntime(
+        kind=profile.kind,
+        name=profile.name,
+        base_url=profile.base_url or fallback_url,
+        api_key=SecretStr(profile.api_key or fallback_key),
+        model=profile.model,
+        params=params,
+    )
 
 
 def runtime_from_settings(settings: Settings, kind: str) -> ModelRuntime:
     """表为空时的兜底：直接用 .env 的 LLM_* / EMBED_* 构造运行时配置。"""
-    ...
-
-
-def build_client(runtime: ModelRuntime) -> AsyncOpenAI:
-    """构造 OpenAI 兼容客户端（Qwen / vLLM / 本地服务均走同一协议）。"""
-    ...
+    if kind == "embed":
+        return ModelRuntime(
+            kind="embed",
+            name="env-embed",
+            base_url=settings.embed_base_url or settings.llm_base_url,
+            api_key=SecretStr(
+                settings.embed_api_key.get_secret_value()
+                or settings.llm_api_key.get_secret_value()
+            ),
+            model=settings.embed_model,
+        )
+    return ModelRuntime(
+        kind="llm",
+        name="env-llm",
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        model=settings.llm_model,
+    )
 
 
 def assert_embed_compatible(vault: Vault, profile: ModelProfile) -> None:
     """检索前守卫：vault 必须用该 embedding 模型建过索引，否则抛 EmbedModelMismatch。
 
     判定：profile.id ∈ json.loads(vault.embed_indexed_profiles or "[]")
-    修复路径：对该 vault 用该 profile 重新 ingest（POST /api/v1/vaults/{id}/reindex?embed_profile=...）
     """
-    ...
+    indexed = json.loads(vault.embed_indexed_profiles or "[]")
+    if profile.id not in indexed:
+        raise EmbedModelMismatch(
+            f"vault(id={vault.id}) 未用 embedding(id={profile.id}, name={profile.name!r}) 建过索引；"
+            f"已建索引的 profile ids: {indexed}。请先 reindex。"
+        )
+
+
+# ===== CRUD 编排 =====
+
+
+def _to_out(profile: ModelProfile) -> ModelProfileOut:
+    """ModelProfile → ModelProfileOut（api_key 脱敏）。"""
+    params = {}
+    if profile.params_json and profile.params_json != "{}":
+        try:
+            params = json.loads(profile.params_json)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return ModelProfileOut(
+        id=profile.id,
+        kind=profile.kind,
+        name=profile.name,
+        provider=profile.provider,
+        base_url=profile.base_url,
+        model=profile.model,
+        params=params,
+        is_default=profile.is_default,
+        enabled=profile.enabled,
+        origin=profile.origin,
+        api_key_masked=mask_api_key(profile.api_key),
+    )
+
+
+def to_out(profile: ModelProfile) -> ModelProfileOut:
+    """ModelProfile → ModelProfileOut（api_key 脱敏）。
+
+    对外暴露：API 层按 id 取单个配置时复用同一份脱敏 / params 解析规则，
+    避免路由里再写一遍（出参永不返回明文 api_key，§18.6）。
+    """
+    return _to_out(profile)
 
 
 async def list_models(session, user_id: str, kind: str | None = None) -> list[ModelProfileOut]:
     """列出当前用户的模型配置（可按 kind=llm|embed 过滤）。"""
-    return model_repo.list_profiles(session, user_id, kind, True)
+    profiles = await model_repo.list_profiles(session, user_id, kind, only_enabled=True)
+    return [_to_out(p) for p in profiles]
 
 
 async def create_model(
     session, settings: Settings, user_id: str, data: ModelProfileCreate
 ) -> ModelProfileOut:
-    # base_url / api_key 为空是允许的（表示回退 .env），落库时保持空串
-    ...
+    """创建模型配置。base_url / api_key 为空是允许的（表示回退 .env）。"""
+    params_json = json.dumps(data.params) if data.params else "{}"
+    profile = await model_repo.create_profile(
+        session,
+        user_id=user_id,
+        kind=data.kind,
+        name=data.name,
+        model=data.model,
+        provider=data.provider,
+        base_url=data.base_url,
+        api_key=data.api_key,
+        params_json=params_json,
+        is_default=data.set_default,
+    )
+    return _to_out(profile)
 
 
 async def update_model(
     session, profile: ModelProfile, data: ModelProfileUpdate
 ) -> ModelProfileOut:
-    ...
+    """局部更新模型配置。"""
+    patch = {}
+    if data.name is not None:
+        patch["name"] = data.name
+    if data.model is not None:
+        patch["model"] = data.model
+    if data.base_url is not None:
+        patch["base_url"] = data.base_url
+    if data.api_key is not None:
+        patch["api_key"] = data.api_key
+    if data.params is not None:
+        patch["params_json"] = json.dumps(data.params)
+    if data.enabled is not None:
+        patch["enabled"] = data.enabled
+
+    if patch:
+        profile = await model_repo.update_profile(session, profile, patch)
+
+    if data.set_default is True:
+        await model_repo.set_default(session, profile)
+
+    return _to_out(profile)
 
 
 async def delete_model(session, profile: ModelProfile) -> None:
-    # 注意：若该 profile 还被 vault.embed_profile_id 引用，应拒绝删除或提示先换模型重建索引
-    ...
+    """删除模型配置。
+
+    注意：若该 profile 还被 vault.embed_profile_id 引用，应拒绝删除或提示先换模型重建索引。
+    """
+    await model_repo.delete_profile(session, profile)
 
 
-async def set_default(session, profile: ModelProfile) -> ModelProfileOut:
-    ...
+async def set_default(session, user_id: str, kind: str, profile: ModelProfile) -> ModelProfileOut:
+    """设为该 kind 的默认项。"""
+    await model_repo.set_default(session, profile)
+    return _to_out(profile)
 
 
 async def test_connection(runtime: ModelRuntime) -> ModelTestResult:
-    # embed：embed 一条短文本，返回维度；llm：极小 max_tokens 试一次，返回首块内容
-    ...
+    """连通性测试：embed 试 1 条，llm 试极短对话。
+
+    实际 API 调用统一走 rag 层（embedder.embed_one / llm_client.chat），
+    本函数只负责计时和结果封装。
+    """
+    start = time.monotonic()
+
+    try:
+        if runtime.kind == "embed":
+            await embed_one("test", runtime)
+        else:
+            await chat(
+                [{"role": "user", "content": "hi"}],
+                runtime,
+                max_tokens=1,
+            )
+
+        elapsed = int((time.monotonic() - start) * 1000)
+        return ModelTestResult(ok=True, model=runtime.model, elapsed_ms=elapsed)
+    except Exception as e:
+        elapsed = int((time.monotonic() - start) * 1000)
+        return ModelTestResult(ok=False, model=runtime.model, elapsed_ms=elapsed, error=str(e))

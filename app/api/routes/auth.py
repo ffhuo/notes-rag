@@ -21,7 +21,7 @@ from app.api.deps import get_current_user_id
 from app.core.config import settings
 from app.core.database import get_session
 from app.core.security import create_access_token, hash_password, verify_password
-from app.models.orm import User
+from app.models import User
 from app.models.schemas import LoginRequest, Token, UserCreate, UserOut
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])

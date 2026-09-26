@@ -1,22 +1,24 @@
 """RAG·嵌入 — 文本转向量（OpenAI 兼容 embedding，异步）。
 
 能力：
-- 批量将文本片段转为 embedding 向量
+- 批量将文本片段转为 embedding 向量（分批 + 并发 + 批量失败降级逐条）
+- embed_one：单条文本嵌入（供 test_connection 等场景）
 - 接入运行时模型配置 ModelRuntime（由 model_service 解析具体用哪个 embedding 模型，见 §18）
-- 控制并发 / 限速，避免触发接口限流
+
+所有 AsyncOpenAI 客户端由 app.rag.client.build_client 统一构造，本模块不直接实例化。
 
 主要函数：
-- async def embed(texts: list[str], runtime: ModelRuntime) -> list[list[float]]: 异步返回向量列表
-      runtime 决定 base_url / api_key / model；不传则不可用（由调用方显式选择模型）
+- async def embed(texts, runtime, *, batch_size, max_concurrency) -> list[list[float]]
+- async def embed_one(text, runtime) -> list[float]
 
 关联方案：docs/design.md §3（技术选型）、§7（RAG 管线设计·嵌入）、§18（多模型管理）。
 """
 import asyncio
 
 from loguru import logger
-from openai import AsyncOpenAI
 
 from app.models.schemas import ModelRuntime
+from app.rag.client import build_client
 
 # 单次请求最大文本数（OpenAI 限制 2048，国内服务通常更小）
 _DEFAULT_BATCH_SIZE = 64
@@ -24,13 +26,31 @@ _DEFAULT_BATCH_SIZE = 64
 _DEFAULT_MAX_CONCURRENCY = 4
 
 
-def _make_client(runtime: ModelRuntime) -> AsyncOpenAI:
-    """根据 runtime 创建 AsyncOpenAI 客户端。"""
-    return AsyncOpenAI(
-        base_url=runtime.base_url,
-        api_key=runtime.api_key.get_secret_value(),
-        timeout=runtime.params.get("timeout", 60),
-    )
+async def embed_one(text: str, runtime: ModelRuntime) -> list[float]:
+    """单条文本嵌入（供连通性测试等轻量场景）。
+
+    Raises:
+        ValueError: runtime 缺少必要字段
+        RuntimeError: embedding 请求失败
+    """
+    if not text:
+        raise ValueError("text 不能为空")
+    if not runtime.base_url or not runtime.model:
+        raise ValueError("runtime 缺少 base_url 或 model")
+
+    client = build_client(runtime)
+    try:
+        kwargs: dict = {"model": runtime.model, "input": text}
+        dimensions = runtime.params.get("dim")
+        if dimensions:
+            kwargs["dimensions"] = dimensions
+
+        resp = await client.embeddings.create(**kwargs)
+        return resp.data[0].embedding
+    except Exception as e:
+        raise RuntimeError(f"embedding 请求失败: {e}") from e
+    finally:
+        await client.close()
 
 
 async def embed(
@@ -63,7 +83,7 @@ async def embed(
     bs = batch_size or runtime.params.get("batch_size", _DEFAULT_BATCH_SIZE)
     mc = max_concurrency or runtime.params.get("max_concurrency", _DEFAULT_MAX_CONCURRENCY)
 
-    client = _make_client(runtime)
+    client = build_client(runtime)
     model = runtime.model
     dimensions = runtime.params.get("dim")  # 部分模型支持指定维度
 

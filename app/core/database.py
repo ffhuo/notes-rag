@@ -18,6 +18,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Optional, AsyncGenerator
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     create_async_engine,
@@ -26,7 +27,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.core.config import settings
-from app.models.orm import Base
+from app.models import Base
 
 _engine: Optional[AsyncEngine] = None
 _async_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
@@ -54,6 +55,18 @@ async def create_database_engine() -> AsyncEngine:
         f"sqlite+aiosqlite:///{db_path}",
         echo=settings.DEBUG,
     )
+
+    # WAL 模式 + busy_timeout（M03 §5.13.8 红线之一）：
+    # 后台作业高频写进度与 API 同时读写并存，默认 journal 模式下读写互斥，
+    # 会出现 API 读被作业写锁阻塞（database is locked）。WAL 读写不互斥，
+    # busy_timeout 兜底偶发的锁竞争。WAL 是库级持久设置，每个新连接都声明一次。
+    @event.listens_for(_engine.sync_engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, _record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+
     _async_session_factory = async_sessionmaker(
         _engine,
         class_=AsyncSession,

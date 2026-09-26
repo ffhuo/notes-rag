@@ -142,6 +142,36 @@ class VectorStore:
         )
         logger.debug(f"Deleted {len(ids)} chunks from vectorstore")
 
+    async def update_metadata(self, ids: Sequence[str], metadatas: Sequence[dict]) -> None:
+        """仅更新指定 id 的 metadata（文件改名零 embedding 用），向量与文档不变。
+
+        Chroma collection.update 只更新显式传入的字段，这里不传 embeddings/documents。
+        """
+        if not ids:
+            return
+        await asyncio.to_thread(
+            self._collection.update,
+            ids=list(ids),
+            metadatas=list(metadatas),
+        )
+        logger.debug(f"Updated metadata for {len(ids)} chunks")
+
+    async def get_all_ids(self) -> list[str]:
+        """返回 collection 内全部向量 id（doctor 三向对账用）。"""
+        data = await asyncio.to_thread(self._collection.get, include=[])
+        return list(data.get("ids", []))
+
+    async def get_metadatas(self, ids: Sequence[str]) -> list[dict]:
+        """按 id 批量取 metadata（与 ids 顺序对应，缺失为 None）。"""
+        if not ids:
+            return []
+        data = await asyncio.to_thread(
+            self._collection.get,
+            ids=list(ids),
+            include=["metadatas"],
+        )
+        return list(data.get("metadatas", []))
+
     async def count(self) -> int:
         """返回 collection 中向量数。"""
         return await asyncio.to_thread(self._collection.count)

@@ -20,22 +20,72 @@
 - 出参**永不返回 api_key**，仅给 api_key_masked（如 sk-ab****yz），见 §18.6
 - base_url / api_key 允许留空，表示回退 .env 的 LLM_* / EMBED_*（§18.3 回退规则）
 
+分层约定：本文件只做「入参校验 + 调 service + 把领域异常翻译成 HTTP 状态码」，
+DB 读写一律经 model_repo / model_service，不在路由里写 SQL。
+
 关联方案：docs/design.md §18（多模型管理）、§8（配置与安全）。
 """
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user_id, get_settings
+from app.core.config import Settings
 from app.core.database import get_session
+from app.models import ModelProfile
 from app.models.schemas import (
     ModelProfileCreate,
     ModelProfileOut,
     ModelProfileUpdate,
+    ModelRuntime,
     ModelTestResult,
 )
+from app.repositories import model_repo, vault_repo
 from app.services import model_service
+from app.services.model_service import to_out, to_runtime
 
 router = APIRouter(prefix="/api/v1/models", tags=["models"])
+
+_KINDS = ("llm", "embed")
+
+
+def _require_kind(kind: str) -> str:
+    """kind 只允许 llm / embed。"""
+    if kind not in _KINDS:
+        raise HTTPException(
+            status_code=422, detail=f"kind 必须是 {' | '.join(_KINDS)} 之一，收到 {kind!r}"
+        )
+    return kind
+
+
+async def _get_or_404(session: AsyncSession, model_id: int, user_id: str) -> ModelProfile:
+    """按 id + 归属取配置，取不到直接 404。"""
+    profile = await model_repo.get_profile(session, model_id, user_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"模型配置不存在：id={model_id}")
+    return profile
+
+
+def _runtime_from_payload(
+    payload: ModelProfileCreate, user_id: str, settings: Settings
+) -> ModelRuntime:
+    """把**未落库**的配置转成 ModelRuntime（含 .env 回退），用于试连。
+
+    构造一个临时 ORM 实例（不加入 session、不 commit），只为复用 to_runtime 里
+    「base_url / api_key 留空即回退 .env」这一份唯一规则，避免在路由里重写一遍。
+    """
+    transient = ModelProfile(
+        user_id=user_id,
+        kind=payload.kind,
+        name=payload.name,
+        model=payload.model,
+        provider=payload.provider,
+        base_url=payload.base_url,
+        api_key=payload.api_key,
+        params_json=json.dumps(payload.params or {}),
+    )
+    return to_runtime(transient, settings)
 
 
 @router.get("", response_model=list[ModelProfileOut])
@@ -45,7 +95,7 @@ async def list_models(
     session: AsyncSession = Depends(get_session),
 ):
     """列出当前用户的模型配置（可按 kind=llm|embed 过滤）。"""
-    return model_service.list_models(user_id, kind)
+    return await model_service.list_models(session, user_id, kind)
 
 
 @router.post("", response_model=ModelProfileOut, status_code=status.HTTP_201_CREATED)
@@ -53,20 +103,30 @@ async def create_model(
     payload: ModelProfileCreate,
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
-    settings=Depends(get_settings),
+    settings: Settings = Depends(get_settings),
 ):
-    # 同名同 kind 已存在 → 409；set_default=true → 调用 model_service.set_default
-    ...
+    """新增模型配置（同名同 kind 已存在 → 409；set_default=true 时同时设为默认）。"""
+    _require_kind(payload.kind)
+
+    existing = await model_repo.find_by_name(session, user_id, payload.kind, payload.name)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409, detail=f"同 kind 下已存在同名配置：{payload.name!r}"
+        )
+
+    return await model_service.create_model(session, settings, user_id, payload)
 
 
 @router.post("/test", response_model=ModelTestResult)
 async def test_unsaved_model(
     payload: ModelProfileCreate,
     user_id: str = Depends(get_current_user_id),
-    settings=Depends(get_settings),
+    settings: Settings = Depends(get_settings),
 ):
-    # 不落库：把 payload 转成 ModelRuntime（应用 .env 回退）后直接试连
-    ...
+    """试连**未保存**的配置：不落库，直接按入参（含 .env 回退）发起一次真实调用。"""
+    _require_kind(payload.kind)
+    runtime = _runtime_from_payload(payload, user_id, settings)
+    return await model_service.test_connection(runtime)
 
 
 @router.get("/{model_id}", response_model=ModelProfileOut)
@@ -75,7 +135,9 @@ async def get_model(
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
 ):
-    ...
+    """取单个配置（api_key 已脱敏）。"""
+    profile = await _get_or_404(session, model_id, user_id)
+    return to_out(profile)
 
 
 @router.patch("/{model_id}", response_model=ModelProfileOut)
@@ -85,8 +147,22 @@ async def update_model(
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
 ):
-    # 若改的是 embedding 且该配置已建过索引 → 提示需对该 vault 重新索引（由前端决定）
-    ...
+    """局部更新配置。
+
+    改 embedding 的 model/params 不会自动重建索引 —— 该配置已建过索引的 vault
+    需要各自 reindex，否则新旧向量混在同一 collection。由前端提示用户决定。
+    """
+    profile = await _get_or_404(session, model_id, user_id)
+
+    # 改名需保持 (user_id, kind, name) 唯一
+    if payload.name is not None and payload.name != profile.name:
+        clash = await model_repo.find_by_name(session, user_id, profile.kind, payload.name)
+        if clash is not None and clash.id != profile.id:
+            raise HTTPException(
+                status_code=409, detail=f"同 kind 下已存在同名配置：{payload.name!r}"
+            )
+
+    return await model_service.update_model(session, profile, payload)
 
 
 @router.delete("/{model_id}")
@@ -95,8 +171,27 @@ async def delete_model(
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
 ):
-    # 被 vault.embed_profile_id 引用 → 409 并提示先换 embedding 重建索引
-    ...
+    """删除配置。
+
+    embedding 配置若仍被某个 vault 引用（当前启用项或已建索引列表）→ 409，
+    提示先对该 vault 换 embedding 并重建索引；直接删会让该 vault 无法检索。
+    """
+    profile = await _get_or_404(session, model_id, user_id)
+
+    if profile.kind == "embed":
+        for vault in await vault_repo.list_vaults(session, user_id):
+            indexed = _indexed_profiles(vault)
+            if vault.embed_profile_id == profile.id or profile.id in indexed:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"embedding 配置仍被 vault(id={vault.id}, name={vault.name!r}) 引用，"
+                        f"请先为其换 embedding 并重建索引"
+                    ),
+                )
+
+    await model_service.delete_model(session, profile)
+    return {"deleted": True, "id": model_id}
 
 
 @router.post("/{model_id}/default", response_model=ModelProfileOut)
@@ -105,7 +200,9 @@ async def set_default_model(
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
 ):
-    ...
+    """把该配置设为所属 kind 的默认项（同 kind 旧默认自动取消）。"""
+    profile = await _get_or_404(session, model_id, user_id)
+    return await model_service.set_default(session, user_id, profile.kind, profile)
 
 
 @router.post("/{model_id}/test", response_model=ModelTestResult)
@@ -113,7 +210,20 @@ async def test_model(
     model_id: int,
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
-    settings=Depends(get_settings),
+    settings: Settings = Depends(get_settings),
 ):
-    # embed：嵌入一条短文本返回维度；llm：极小 max_tokens 试一次返回首块内容
-    ...
+    """试连已保存的配置：embed 试嵌一条短文本，llm 试一次极短对话。"""
+    profile = await _get_or_404(session, model_id, user_id)
+    runtime = to_runtime(profile, settings)
+    return await model_service.test_connection(runtime)
+
+
+def _indexed_profiles(vault) -> list[int]:
+    """vault.embed_indexed_profiles（JSON 字符串）→ int 列表；非法值按空处理。"""
+    try:
+        raw = json.loads(vault.embed_indexed_profiles or "[]")
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [x for x in raw if isinstance(x, int)]

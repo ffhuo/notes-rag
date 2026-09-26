@@ -7,13 +7,6 @@
 - 裁剪：每 vault 保留最近 N 条（SYNC_RUNS_KEEP，默认 50），防定时同步撑爆表
 - 启动清理：把崩溃残留的 queued / running 全部置为 aborted
 
-为什么落在 DB 而不是只写日志：
-「为什么这个文件没被索引」需要一个**面向用户**（前端可按 vault 查）的答案，
-而日志面向开发者、会被轮转、无法按 vault 维度查询（见 M06 ADR-7）。
-
-为什么进度也写这张表、不另建进度表：
-进度字段与作业本身一对一、同生命周期，拆表只会多一次 join（M03 ADR-13）。
-
 主要函数：
 - create_sync_run(session, vault_id, trigger, mode, dry_run, user_id) -> SyncRun
 - get_sync_run(session, run_id, user_id=None) -> SyncRun | None
@@ -31,7 +24,15 @@ all 函数都不 commit —— 事务边界由调用方（service / 路由）决
 
 关联方案：M03 §5.11 / §5.13；M06 ADR-7（记录落库）、ADR-8（409 判定依据）。
 """
+import json
+from datetime import datetime, timezone
+
+from sqlalchemy import select, delete as sa_delete, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import SyncRun
+
+_ACTIVE_STATUSES = ("queued", "running")
 
 
 async def create_sync_run(
@@ -41,26 +42,46 @@ async def create_sync_run(
     mode: str = "sync",
     dry_run: bool = False,
     user_id: str = "default",
-):
+) -> SyncRun:
     """新建作业记录：status="queued"、stage="queued"，返回该 SyncRun。
 
-    **必须在 asyncio.create_task 之前提交**（M03 §5.13.2）—— 否则进程在
-    「返回 run_id」与「建 task」之间崩溃时，客户端会拿到一个永远查不到的 run_id。
+    **必须在 asyncio.create_task 之前提交**（M03 §5.13.2）。
     """
-    ...
+    run = SyncRun(
+        vault_id=vault_id,
+        user_id=user_id,
+        trigger=trigger,
+        mode=mode,
+        dry_run=dry_run,
+        status="queued",
+        stage="queued",
+    )
+    session.add(run)
+    await session.commit()
+    await session.refresh(run)
+    return run
 
 
-async def get_sync_run(session: AsyncSession, run_id: int, user_id: str | None = None):
-    """取单个作业详情（进度轮询用）。带 user_id 时同时校验归属（防越权）。"""
-    ...
+async def get_sync_run(
+    session: AsyncSession, run_id: int, user_id: str | None = None
+) -> SyncRun | None:
+    """取单个作业详情（进度轮询用）。带 user_id 时同时校验归属。"""
+    query = select(SyncRun).where(SyncRun.id == run_id)
+    if user_id is not None:
+        query = query.where(SyncRun.user_id == user_id)
+    result = await session.execute(query)
+    return result.scalar_one_or_none()
 
 
-async def find_active_run(session: AsyncSession, vault_id: int):
-    """取该 vault 当前进行中的作业（status in queued / running）。
-
-    用途：submit 抢不到锁时查出 existing_run_id，供 API 返回 409（M06 ADR-8）。
-    """
-    ...
+async def find_active_run(session: AsyncSession, vault_id: int) -> SyncRun | None:
+    """取该 vault 当前进行中的作业（status in queued / running）。"""
+    result = await session.execute(
+        select(SyncRun).where(
+            SyncRun.vault_id == vault_id,
+            SyncRun.status.in_(_ACTIVE_STATUSES),
+        ).order_by(SyncRun.id.desc())
+    )
+    return result.scalar_one_or_none()
 
 
 async def update_progress(
@@ -72,12 +93,23 @@ async def update_progress(
     current_item: str | None,
     message: str | None,
 ) -> None:
-    """更新进度列（由 run_service.ProgressReporter 节流后调用，M03 ADR-13）。
+    """更新进度列（由 run_service.ProgressReporter 节流后调用）。
 
-    `total=None` 表示该阶段总量不可知（scan 阶段）——不要替它编一个数字。
-    本函数抛异常由调用方吞掉并记 WARNING（进度不是正确性依赖）。
+    `total=None` 表示该阶段总量不可知（scan 阶段）。
+    行已被裁剪时不报错（进度不是正确性依赖）。
     """
-    ...
+    await session.execute(
+        sa_update(SyncRun)
+        .where(SyncRun.id == run_id)
+        .values(
+            stage=stage,
+            total=total,
+            processed=processed,
+            current_item=current_item,
+            message=message,
+        )
+    )
+    await session.commit()
 
 
 async def finish_sync_run(
@@ -93,42 +125,123 @@ async def finish_sync_run(
 
     counters 形如 {adds, updates, moves, deletes, unchanged, failed_cnt, embed_profile_id}。
     status 取值：success | partial | failed | cancelled | aborted。
-    同时把 stage 置 "done"、processed 对齐 total（前端进度条收满）。
+    行已被裁剪时不报错。
     """
-    ...
+    now = datetime.now(timezone.utc)
+
+    # 先取 started_at 计算 elapsed_ms
+    result = await session.execute(
+        select(SyncRun.started_at).where(SyncRun.id == run_id)
+    )
+    started_at = result.scalar_one_or_none()
+    elapsed_ms = 0
+    if started_at is not None:
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        elapsed_ms = int((now - started_at).total_seconds() * 1000)
+
+    values = {
+        "status": status,
+        "stage": "done",
+        "finished_at": now,
+        "elapsed_ms": elapsed_ms,
+        "blocked_reason": blocked_reason,
+        "error": error,
+        "detail_json": detail_json if isinstance(detail_json, str) else json.dumps(detail_json),
+    }
+    # 展开 counters 到独立列
+    for key in ("adds", "updates", "moves", "deletes", "unchanged", "failed_cnt"):
+        if key in counters:
+            values[key] = counters[key]
+    if "embed_profile_id" in counters:
+        values["embed_profile_id"] = counters["embed_profile_id"]
+    # processed 对齐 total
+    if "total" in counters:
+        values["total"] = counters["total"]
+        values["processed"] = counters["total"]
+
+    await session.execute(
+        sa_update(SyncRun).where(SyncRun.id == run_id).values(**values)
+    )
+    await session.commit()
 
 
 async def request_cancel(session: AsyncSession, run_id: int) -> bool:
     """置 cancel_requested = True，返回是否受理。
 
-    返回 False = 作业已是终态（不可取消）→ API 层转 409。重复取消无副作用（幂等）。
-    注意：置标志 ≠ 立刻停止，执行侧在**文件边界**才停（M03 ADR-14）。
+    返回 False = 作业已是终态（不可取消）。重复取消无副作用（幂等）。
     """
-    ...
+    result = await session.execute(
+        select(SyncRun.status).where(SyncRun.id == run_id)
+    )
+    status = result.scalar_one_or_none()
+    if status is None or status not in _ACTIVE_STATUSES:
+        return False
+
+    await session.execute(
+        sa_update(SyncRun)
+        .where(SyncRun.id == run_id)
+        .values(cancel_requested=True)
+    )
+    await session.commit()
+    return True
 
 
-async def list_sync_runs(session: AsyncSession, vault_id: int, limit: int = 20) -> list:
-    """按 vault 取最近 limit 条作业记录，按 started_at 倒序。
+async def list_sync_runs(
+    session: AsyncSession, vault_id: int, limit: int = 20
+) -> list[SyncRun]:
+    """按 vault 取最近 limit 条作业记录，按 started_at 倒序。"""
+    result = await session.execute(
+        select(SyncRun)
+        .where(SyncRun.vault_id == vault_id)
+        .order_by(SyncRun.started_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
 
-    前端「任务与进度」列表用（M07 §5.4）—— 需返回**全部状态**，
-    由前端把运行中的置顶，而不是在 SQL 层过滤掉。
-    """
-    ...
 
+async def trim_sync_runs(
+    session: AsyncSession, vault_id: int, keep: int = 50
+) -> None:
+    """只保留最近 keep 条，其余按时间删除。**不得**删掉 queued / running 的行。"""
+    # 取要保留的 id 列表（最近 keep 条 + 所有 active）
+    keep_result = await session.execute(
+        select(SyncRun.id)
+        .where(SyncRun.vault_id == vault_id)
+        .order_by(SyncRun.started_at.desc())
+        .limit(keep)
+    )
+    keep_ids = set(keep_result.scalars().all())
 
-async def trim_sync_runs(session: AsyncSession, vault_id: int, keep: int = 50) -> None:
-    """只保留最近 keep 条，其余按时间删除（定时同步必须配合裁剪）。
+    active_result = await session.execute(
+        select(SyncRun.id).where(
+            SyncRun.vault_id == vault_id,
+            SyncRun.status.in_(_ACTIVE_STATUSES),
+        )
+    )
+    keep_ids.update(active_result.scalars().all())
 
-    **不得**删掉 queued / running 的行 —— 否则用户正在看的进度会突然消失。
-    """
-    ...
+    if not keep_ids:
+        return
+
+    await session.execute(
+        sa_delete(SyncRun).where(
+            SyncRun.vault_id == vault_id,
+            SyncRun.id.notin_(keep_ids),
+        )
+    )
+    await session.commit()
 
 
 async def recover_stale_runs(session: AsyncSession) -> int:
     """启动清理：把全部残留 queued / running 置为 aborted，返回被标记行数。
 
-    不限于单个 vault —— 进程重启后内存中的 task 全部消失，
-    这些行留着会阻塞「是否有作业在跑」的判断，并让用户看到僵尸作业。
-    不清理成 cancelled：二者语义不同，cancelled 只用于**用户主动停止**（M03 §5.13.6）。
+    不限于单个 vault —— 进程重启后内存中的 task 全部消失。
     """
-    ...
+    result = await session.execute(
+        sa_update(SyncRun)
+        .where(SyncRun.status.in_(_ACTIVE_STATUSES))
+        .values(status="aborted", stage="done")
+    )
+    await session.commit()
+    return result.rowcount
