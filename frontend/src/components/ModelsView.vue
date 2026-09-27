@@ -34,6 +34,13 @@ const KIND_OPTIONS = [
   { value: 'asr', label: 'asr（语音转文字）' },
 ]
 
+// asr 的调用协议：不同厂商的语音接口不是同一套（详见 app/api/routes/audio.py）。
+// 它存进 params.protocol，缺省 = OpenAI ASR，故不新增字段也不需要迁移。
+const ASR_PROTOCOL_OPTIONS = [
+  { value: '', label: 'OpenAI ASR（/audio/transcriptions，默认）' },
+  { value: 'dashscope_native', label: 'DashScope 原生（百炼 Qwen-Audio-3.x-ASR-Flash）' },
+]
+
 const columns = [
   { key: 'name', label: '名称', sortable: true },
   { key: 'model', label: '模型标识', mono: true },
@@ -61,7 +68,18 @@ const confirmTarget = ref(null)
 const confirmLoading = ref(false)
 
 function blankForm() {
-  return { id: null, kind: 'llm', name: '', model: '', base_url: '', api_key: '', set_default: false }
+  return {
+    id: null,
+    kind: 'llm',
+    name: '',
+    model: '',
+    base_url: '',
+    api_key: '',
+    set_default: false,
+    protocol: '',   // 仅 asr 用：'' = OpenAI ASR，'dashscope_native' = 百炼原生协议
+    multimodal: false,  // 仅 llm 用：是否支持图片输入（params.multimodal）
+    params: {},     // 编辑时承接后端已有 params，保存时按类型增删对应键
+  }
 }
 
 /* ---------- 加载 ---------- */
@@ -166,6 +184,9 @@ function openEdit(m) {
     base_url: m.base_url || '',
     api_key: '',
     set_default: !!m.is_default,
+    protocol: m.params?.protocol === 'dashscope_native' ? 'dashscope_native' : '',
+    multimodal: !!m.params?.multimodal,
+    params: { ...(m.params || {}) },
   }
   formError.value = ''
   editing.value = true
@@ -184,6 +205,19 @@ async function save() {
   }
   saving.value = true
   try {
+    // 按类型把 UI 开关写进 params；其余 kind 不传 params，避免清空后端已有参数
+    let params = null
+    if (f.kind === 'asr') {
+      params = { ...(f.params || {}) }
+      if (f.protocol === 'dashscope_native') params.protocol = 'dashscope_native'
+      else delete params.protocol
+    } else if (f.kind === 'llm') {
+      params = { ...(f.params || {}) }
+      // 勾选 = 支持图片输入：索引时会调用该模型理解笔记里的图片
+      if (f.multimodal) params.multimodal = true
+      else delete params.multimodal
+    }
+
     if (f.id) {
       const patch = {
         name: f.name.trim(),
@@ -191,6 +225,7 @@ async function save() {
         base_url: f.base_url.trim(),
         set_default: f.set_default,
       }
+      if (params) patch.params = params
       // 留空 = 不传该字段，保留已存密钥（传空串会真的清空密钥）
       if (f.api_key) patch.api_key = f.api_key
       await modelsApi.update(f.id, patch)
@@ -202,6 +237,7 @@ async function save() {
         base_url: f.base_url.trim(),
         api_key: f.api_key,
         set_default: f.set_default,
+        ...(params ? { params } : {}),
       })
     }
     editing.value = false
@@ -324,7 +360,12 @@ async function doRemove() {
       empty-icon="models"
     >
       <template #cell-name="{ row }">
-        <span class="models__name">{{ row.name }}</span>
+        <span class="models__name-cell">
+          <span class="models__name">{{ row.name }}</span>
+          <span v-if="row.kind === 'llm' && row.params?.multimodal" class="models__tag">
+            支持图片
+          </span>
+        </span>
       </template>
 
       <template #cell-base_url="{ row }">
@@ -428,6 +469,22 @@ async function doRemove() {
           placeholder="sk-..."
           :hint="form.id ? '留空 = 不改动已存密钥；保存后只显示掩码' : '留空 = 不带鉴权（第三方服务通常必填）；保存后只显示掩码'"
         />
+        <AppSelect
+          v-if="form.kind === 'asr'"
+          v-model="form.protocol"
+          label="音频协议"
+          :options="ASR_PROTOCOL_OPTIONS"
+          hint="OpenAI ASR 走 multipart /audio/transcriptions；百炼 qwen3-asr-flash 是对话协议（音频走 Base64），选错会直接报错"
+        />
+        <AppField
+          v-if="form.kind === 'llm'"
+          hint="勾选后，索引会把笔记里的图片交给该模型理解并转成文字（外链直传 URL，本地图读取后转 Base64）；未勾选或没有此类模型时图片会被跳过。"
+        >
+          <label class="models__check">
+            <input v-model="form.multimodal" type="checkbox" />
+            <span>支持图片输入（多模态）</span>
+          </label>
+        </AppField>
         <AppField>
           <label class="models__check">
             <input v-model="form.set_default" type="checkbox" />
@@ -562,10 +619,30 @@ async function doRemove() {
 }
 
 /* ---------- 单元格 ---------- */
+.models__name-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+}
+
 .models__name {
   font-weight: var(--font-weight-semibold);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models__tag {
+  flex: none;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-on-soft);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  font-weight: var(--font-weight-semibold);
   white-space: nowrap;
 }
 

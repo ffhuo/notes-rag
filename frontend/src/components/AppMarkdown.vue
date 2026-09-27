@@ -13,9 +13,11 @@ import { renderMarkdown } from '../markdown'
 const props = defineProps({
   /** markdown 原文（命中片段的 content）。 */
   source: { type: String, default: '' },
+  /** 片段内的图片信息（后端 chunk.metadata["images"]），用于把图片标记还原成可读块。 */
+  images: { type: Array, default: () => [] },
 })
 
-const html = computed(() => renderMarkdown(props.source))
+const html = computed(() => renderMarkdown(props.source, props.images))
 
 /** 复制反馈在按钮上显示多久（毫秒）。 */
 const COPIED_HINT_MS = 1500

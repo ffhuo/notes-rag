@@ -102,12 +102,16 @@ async def stream(
             embed_runtime=embed_runtime,
         )
 
+        # 按检索命中组装来源：字段与 ChunkHit 对齐（含 content），
+        # 前端「来源」展开要显示片段原文；漏掉 content 会让展开后一片空白
         sources = [
             {
                 "note_id": h.note_id,
                 "file_path": h.file_path,
                 "title": h.title,
+                "content": h.content,
                 "score": h.score,
+                "images": h.images,
             }
             for h in hits
         ]

@@ -69,10 +69,6 @@ class ReconcilePlan:
     moves: list[tuple[str, str]] = field(default_factory=list)  # (old_path, new_path)
     unchanged: list[str] = field(default_factory=list)
 
-    @property
-    def total_changes(self) -> int:
-        return len(self.adds) + len(self.updates) + len(self.deletes) + len(self.moves)
-
     def samples(self, limit: int = 10) -> dict[str, list[str]]:
         return {
             "adds": self.adds[:limit],
@@ -95,7 +91,7 @@ async def sync_vault(
     filters: "Optional[IngestFilters]" = None,
     embed_runtime: "ModelRuntime | None" = None,
     embed_profile_id: "int | str | None" = None,
-    trigger: str = "manual",
+    image_runtime: "ModelRuntime | None" = None,
     progress: "ProgressSink | None" = None,
 ) -> SyncResult:
     """对账并同步一个 vault 的索引，跑到结束返回 SyncResult。"""
@@ -125,7 +121,7 @@ async def sync_vault(
     if mode == "rebuild":
         return await _run_rebuild(
             vault, local_path, seen, embed_runtime, embed_profile_id,
-            dry_run, start, result, progress,
+            dry_run, start, result, progress, image_runtime,
         )
 
     # [diff] 需要算 hash（L2）的文件 = 新增 + L1 不一致，这批文件数就是本阶段的确定总量，
@@ -178,6 +174,7 @@ async def sync_vault(
     cancelled = await _apply_plan(
         vault, local_path, known, plan, embed_runtime, embed_profile_id,
         allow_delete=blocked_reason is None, result=result, progress=progress,
+        image_runtime=image_runtime,
     )
 
     result.elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -187,17 +184,6 @@ async def sync_vault(
 
 
 # ===== 判据与对账（纯逻辑，可单测）=====
-
-
-def compute_file_sig(path: Path, rel_path: str, with_hash: bool = False) -> FileSig:
-    """计算单文件判据。with_hash=False 只取 L1（stat），True 再算 L2（sha256 前 16 位）。"""
-    st = path.stat()
-    return FileSig(
-        rel_path=rel_path,
-        size_bytes=st.st_size,
-        mtime_ns=st.st_mtime_ns,
-        content_hash=ingest_service.file_content_hash(path) if with_hash else "",
-    )
 
 
 def reconcile(
@@ -278,7 +264,7 @@ def reconcile(
 async def _apply_plan(
     vault, local_path, known, plan: ReconcilePlan,
     embed_runtime, embed_profile_id, allow_delete: bool,
-    result: SyncResult, progress,
+    result: SyncResult, progress, image_runtime=None,
 ) -> bool:
     """执行对账计划，返回是否被取消。失败计入 result.failed_files。"""
     cancelled = False
@@ -306,6 +292,7 @@ async def _apply_plan(
                 vault, local_path / rel, rel,
                 embed_runtime=embed_runtime,
                 embed_profile_id=embed_profile_id,
+                image_runtime=image_runtime,
             )
             if n == 0 and rel in plan.adds:
                 # 无解析器/空文件：从新增计数中摘掉，避免误导
@@ -345,7 +332,7 @@ async def _apply_plan(
 
 async def _run_rebuild(
     vault, local_path, seen, embed_runtime, embed_profile_id,
-    dry_run, start, result: SyncResult, progress,
+    dry_run, start, result: SyncResult, progress, image_runtime=None,
 ) -> SyncResult:
     """rebuild：重置目标集合 + 清空 DB 行，再全量索引（mode=rebuild 特例，非另一套路径）。"""
     all_paths = sorted(seen.keys())
@@ -381,6 +368,7 @@ async def _run_rebuild(
                 vault, local_path / rel, rel,
                 embed_runtime=embed_runtime,
                 embed_profile_id=profile_id,
+                image_runtime=image_runtime,
             )
             if n > 0:
                 indexed += 1
@@ -494,7 +482,7 @@ async def _yield() -> None:
 # ===== doctor =====
 
 
-async def doctor(vault: Vault, local_path: Path, repair: bool = False) -> DoctorReport:
+async def doctor(vault: Vault, repair: bool = False) -> DoctorReport:
     """Chroma ↔ chunks ↔ notes 三向一致性自检（M03 §5.12）。"""
     profile_id = vault.embed_profile_id or ingest_service.ENV_PROFILE_PLACEHOLDER
     store = VectorStore(

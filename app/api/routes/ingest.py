@@ -27,8 +27,7 @@ embed_indexed_profiles（**失败 / 取消时保持原值**，M06 ADR-9）。
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user_id, get_session, get_settings
-from app.core.config import Settings
+from app.api.deps import get_current_user_id, get_session
 from app.models import Vault
 from app.models.schemas import IngestRequest, IngestSubmitResponse
 from app.services import vault_service
@@ -102,7 +101,6 @@ async def ingest(
     req: IngestRequest,
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ) -> IngestSubmitResponse:
     """提交索引作业（202 = 已受理，不代表已完成）。
 
@@ -144,7 +142,6 @@ async def ingest(
             # 提交作业
             run = await vault_service.submit_sync(
                 vault=vault,
-                settings=settings,
                 embed_profile_ref=req.embed_profile,
                 mode=req.mode,
                 dry_run=req.dry_run,

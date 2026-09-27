@@ -17,10 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import (
     get_current_user_id,
     get_session,
-    get_settings,
     resolve_embed_runtime,
 )
-from app.core.config import Settings
 from app.models.schemas import SearchRequest, SearchResponse
 from app.repositories import vault_repo
 from app.services import retrieval_service
@@ -33,7 +31,6 @@ async def search(
     req: SearchRequest,
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ) -> SearchResponse:
     """语义检索：query → 向量 → Top-K → 命中列表。
 
@@ -63,7 +60,7 @@ async def search(
 
     # embedding 跟随该 vault 已建索引的模型；未建索引 → 409（守卫在 deps 内）
     embed_runtime, embed_profile_id = await resolve_embed_runtime(
-        session, settings, user_id, vault
+        session, user_id, vault
     )
 
     hits = await retrieval_service.retrieve(

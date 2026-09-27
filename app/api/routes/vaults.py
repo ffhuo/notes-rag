@@ -502,10 +502,13 @@ async def delete_vault(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
-    """删除 vault：先清向量集合，再级联删 notes / chunks / vault 行。
+    """删除 vault：清向量集合 → 删上传副本目录 → 级联删 notes / chunks / sync_runs / vault 行。
 
     有作业在跑 → 409：删除记录与后台协程会互相打脸（协程仍会写进度 / 回写模型状态）。
     用户应先 POST cancel 并等它到终态。
+
+    顺序刻意如此：DB 行放最后删，中途失败不会留下「库记录已没了但向量 / 文件还在」的状态。
+    会话（conversations.vault_id）不处理，保留用户的历史问答记录。
     """
     vault = await _get_vault_or_404(session, vault_id, user_id)
 
@@ -536,6 +539,9 @@ async def delete_vault(
                 "清理 vault 向量集合失败 vault=%s profile=%s", vault.id, profile_id, exc_info=True
             )
 
+    # 删上传副本目录：仅 uploaded 类型生效（local 目录属于用户自己的磁盘，绝不触碰）
+    await vault_service.delete_upload_dir(vault, settings)
+
     await vault_repo.delete_vault(session, vault.id, user_id)
     logger.info("vault 已删除", vault_id=vault.id, user_id=user_id)
     return {"deleted": True, "id": vault_id}
@@ -546,7 +552,6 @@ async def delete_vault(
 
 async def _submit(
     vault: Vault,
-    settings: Settings,
     *,
     embed_profile_ref: str | None,
     mode: str,
@@ -559,7 +564,6 @@ async def _submit(
     try:
         return await vault_service.submit_sync(
             vault=vault,
-            settings=settings,
             embed_profile_ref=embed_profile_ref,
             mode=mode,
             dry_run=dry_run,
@@ -599,7 +603,6 @@ async def sync_vault(
     payload: SyncRequest = SyncRequest(),
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ):
     """提交一次同步作业（默认 mode="sync" 增量对账）→ 202。
 
@@ -609,7 +612,6 @@ async def sync_vault(
     vault = await _get_vault_or_404(session, vault_id, user_id)
     run = await _submit(
         vault,
-        settings,
         embed_profile_ref=payload.embed_profile,
         mode=payload.mode,
         dry_run=payload.dry_run,
@@ -632,7 +634,6 @@ async def reindex_vault(
     ),
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ):
     """全量重建索引 → 202（= sync 的 mode="rebuild" 特例，不是另一套代码路径）。
 
@@ -642,7 +643,6 @@ async def reindex_vault(
     vault = await _get_vault_or_404(session, vault_id, user_id)
     run = await _submit(
         vault,
-        settings,
         embed_profile_ref=embed_profile,
         mode="rebuild",
         dry_run=False,
@@ -720,12 +720,12 @@ async def cancel_run(
 async def _doctor(
     vault: Vault, settings: Settings, *, repair: bool
 ) -> DoctorReport:
-    """解析本地路径后跑三向一致性自检（源不可达 → 409，无法自检）。"""
+    """校验本地源可达后跑三向一致性自检（源不可达 → 409，无法自检）。"""
     try:
-        local_path = vault_service.resolve_local_path(vault, settings)
+        vault_service.resolve_local_path(vault, settings)
     except SourceUnavailable as e:
         raise HTTPException(status_code=409, detail=str(e))
-    return await sync_service.doctor(vault, local_path, repair=repair)
+    return await sync_service.doctor(vault, repair=repair)
 
 
 @router.get("/{vault_id}/doctor", response_model=DoctorReport)

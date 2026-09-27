@@ -10,7 +10,7 @@ ORM 按模块拆分，统一从这里导入：
 from app.models.base import Base
 from app.models.user import User
 from app.models.model import ModelProfile
-from app.models.vault import Vault, Note, Chunk, SyncRun
+from app.models.vault import Vault, Note, Chunk, SyncRun, ImageCache
 from app.models.chat import Conversation, Message
 
 __all__ = [
@@ -21,6 +21,7 @@ __all__ = [
     "Note",
     "Chunk",
     "SyncRun",
+    "ImageCache",
     "Conversation",
     "Message",
 ]

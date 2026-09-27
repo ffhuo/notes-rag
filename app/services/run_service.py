@@ -350,10 +350,17 @@ async def execute(
                 resolved_profile_id or vault.embed_profile_id
             ) else None
             profile = await model_service.resolve_profile(
-                session, settings, "embed", ref=ref, user_id=vault.user_id
+                session, "embed", ref=ref, user_id=vault.user_id
             )
             runtime = to_runtime(profile)
             resolved_profile_id = profile.id
+
+    # 解析图片处理用的多模态 LLM 运行时（本层解析一次，与 embed 同模式下传整个作业）。
+    # 无多模态配置时返回 None —— 图片处理整段跳过，绝不让文件索引失败。
+    async with session_scope() as session:
+        image_runtime = await model_service.resolve_image_runtime(session, vault.user_id)
+    if image_runtime is not None:
+        logger.info("启用图片处理 model=%s vault_id=%s", image_runtime.model, vault.id)
 
     effective_filters = filters or _vault_filters(vault)
 
@@ -370,7 +377,7 @@ async def execute(
             filters=effective_filters,
             embed_runtime=runtime,
             embed_profile_id=resolved_profile_id,
-            trigger=run.trigger,
+            image_runtime=image_runtime,
             progress=reporter,
         )
     except Exception as e:  # noqa: BLE001 —— 任何未预期异常都要落终态，不能留僵尸作业

@@ -9,7 +9,7 @@
 - create_database_engine(): 初始化引擎与会话工厂（lifespan 启动时调用）
 - get_session(): FastAPI 依赖，yield 会话
 - session_scope(): 独立会话上下文，供**请求作用域之外**的后台协程使用（作业层）
-- init_db(): 依据 ORM 模型建表
+- init_db(): 依据 ORM 模型建表，并补齐已存在表的增量列（本项目无迁移框架）
 - close_database_engine(): 释放引擎连接（lifespan 关闭时调用）
 
 关联方案：docs/design.md §2（core/database.py）、§6（数据模型）。
@@ -105,12 +105,39 @@ async def session_scope() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """依据 ORM 模型建表（create_all）。"""
+    """依据 ORM 模型建表（create_all），并补齐已存在表的增量列。"""
     if _engine is None:
         await create_database_engine()
 
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _ensure_image_cache_columns(conn)
+
+
+# image_cache 的增量列：create_all **不会**给已存在的表加列，而本项目没有迁移框架
+# （无 Alembic）。这里按需 ALTER 补齐 —— 只列真正需要的列，不造通用迁移机制。
+# uid 的 DDL 刻意不给默认值：存量行只能落 NULL，而 SQLite 的 UNIQUE 索引允许多个
+# NULL，不会因「多行都是 ''」而建索引失败；新行由代码保证写入非空 uid。
+_IMAGE_CACHE_NEW_COLUMNS: dict[str, str] = {
+    "uid": "VARCHAR",
+    "source_ref": "VARCHAR DEFAULT ''",
+}
+
+
+async def _ensure_image_cache_columns(conn) -> None:
+    """补齐 image_cache 的增量列与 uid 唯一索引（幂等，可重复执行）。"""
+    result = await conn.exec_driver_sql("PRAGMA table_info(image_cache)")
+    cols = {row[1] for row in result.fetchall()}
+    if not cols:            # 表尚不存在：create_all 已按新模型建出，无需补列
+        return
+    for name, ddl in _IMAGE_CACHE_NEW_COLUMNS.items():
+        if name not in cols:
+            # 列名与 DDL 均来自本模块常量，无外部输入
+            await conn.exec_driver_sql(f"ALTER TABLE image_cache ADD COLUMN {name} {ddl}")
+    # 与模型里 Index("uq_image_cache_uid", unique=True) 同名，故可幂等重复执行
+    await conn.exec_driver_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_image_cache_uid ON image_cache(uid)"
+    )
 
 
 async def close_database_engine() -> None:

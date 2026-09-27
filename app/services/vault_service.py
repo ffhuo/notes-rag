@@ -20,11 +20,14 @@
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import shutil
 import zipfile
 from pathlib import Path
 from typing import Any
+
+from loguru import logger
 
 from app.core.config import Settings, settings as default_settings
 from app.core.database import session_scope
@@ -132,9 +135,24 @@ async def save_upload(vault_id: "int | str", file: Any, settings: Settings = def
     return target
 
 
+async def delete_upload_dir(vault: "Vault", settings: Settings = default_settings) -> None:
+    """删除 uploaded 类型 vault 的解压副本目录（UPLOAD_DIR/<vault_id>）。
+
+    只对上传副本生效：local 的 source_value 是用户自己的目录、git/remote 是缓存目录，
+    都不属于本系统创建，绝不能删。目录已不存在时静默返回（重复删除无害）。
+    阻塞 IO 放线程池；ignore_errors 让「个别文件删不掉」不阻断整个删除流程。
+    """
+    if vault.source_type != "uploaded":
+        return
+    target = (Path(settings.upload_dir) / str(vault.id)).resolve()
+    if not target.exists():
+        return
+    await asyncio.to_thread(shutil.rmtree, target, ignore_errors=True)
+    logger.info("已删除上传副本目录", vault_id=vault.id, path=str(target))
+
+
 async def submit_sync(
     vault: Vault,
-    settings: Settings = default_settings,
     embed_profile_ref: str | None = None,
     mode: str = "sync",
     dry_run: bool = False,
@@ -148,7 +166,8 @@ async def submit_sync(
     步骤：
     1) 解析 embedding：ref（name 或 id）或当前默认 embed profile → runtime；
        一条 embed 配置都没有时抛 ModelNotConfigured，由路由层转 409
-    2) 增量模式下做跨模型守卫 assert_embed_compatible；rebuild 允许换模型
+    2) 增量模式且该 vault 已有索引时做跨模型守卫 assert_embed_compatible；
+       从未建过索引（首次索引）或 rebuild 模式直接放行
     3) run_service.submit(...) —— 抢锁 / 落库(queued) / create_task / 返回 run
 
     本函数**不解析 local_path**（执行阶段才解析），提交不依赖源可达。
@@ -156,13 +175,15 @@ async def submit_sync(
     async with session_scope() as session:
         # 无任何 embed 配置 → ModelNotConfigured，路由层转 409 提示去「模型」页配置
         profile = await model_service.resolve_profile(
-            session, settings, "embed", ref=embed_profile_ref, user_id=vault.user_id
+            session, "embed", ref=embed_profile_ref, user_id=vault.user_id
         )
         runtime = to_runtime(profile)
         profile_id: "int | str" = profile.id
 
-        # 跨模型守卫：只对「增量 sync」生效；换模型必须走 rebuild（M08 §2）
-        if mode != "rebuild":
+        # 跨模型守卫：只对「增量 sync」且该 vault **已建过索引**时生效（M08 §2）。
+        # 从未建过索引（列表为空）即首次建索引，没有存量向量空间可冲突，
+        # 若也拦截则新建 vault 的首个 sync 永远 409、只能靠 reindex 起索引。
+        if mode != "rebuild" and model_service.indexed_profile_ids(vault):
             model_service.assert_embed_compatible(vault, profile)
 
     return await run_service.submit(

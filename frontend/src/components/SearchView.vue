@@ -13,7 +13,7 @@
 // 显示 —— 否则 .md 笔记会把 `##`、`**` 这些标记直接糊在界面上。
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { apiFetch, vaultsApi } from '../api'
-import { isMarkdownPath } from '../markdown'
+import { imageMarkersToText, isMarkdownPath } from '../markdown'
 import { toast } from '../toast'
 import AppButton from './AppButton.vue'
 import AppCard from './AppCard.vue'
@@ -220,8 +220,8 @@ function resetSearch() {
               'search__hit-content--plain': !isMarkdownPath(h.file_path),
             }"
           >
-            <AppMarkdown v-if="isMarkdownPath(h.file_path)" :source="h.content" />
-            <template v-else>{{ h.content }}</template>
+            <AppMarkdown v-if="isMarkdownPath(h.file_path)" :source="h.content" :images="h.images" />
+            <template v-else>{{ imageMarkersToText(h.content, h.images, false) }}</template>
           </div>
 
           <AppButton

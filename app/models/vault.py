@@ -6,7 +6,7 @@ sync_runs 是作业记录表，见 M03 §5.11 / §5.13。
 """
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import (
-    String, Integer, Boolean, BigInteger, ForeignKey, DateTime, UniqueConstraint, func,
+    String, Integer, Boolean, BigInteger, ForeignKey, DateTime, Index, UniqueConstraint, func,
 )
 
 from app.models.base import Base
@@ -77,6 +77,49 @@ class Chunk(Base):
     char_end: Mapped[int] = mapped_column(Integer)
     vector_id: Mapped[str] = mapped_column(String, unique=True)
     embed_profile_id: Mapped[int] = mapped_column(Integer, nullable=True)
+
+
+class ImageCache(Base):
+    """图片处理缓存表：内容寻址，避免同一图片跨文档 / 跨次作业重复调用多模态模型。
+
+    - user_id：多用户模式下隔离不同用户对同一图片的处理结果
+    - source_kind：local（本地文件）/ remote（http/https 外链）
+    - content_key：local→sha256(文件字节)；remote→sha256(url)
+    - processor：处理器标识（当前固定 "llm-vision"）
+    - content：模型返回的文字 / 结构描述；上游失败时为空串
+    - model：产出该结果的多模态模型名（仅记录，不参与去重）
+    - uid：稳定短标识（img_ + sha256(user_id:content_key) 前 16 位）。chunk 的
+      metadata["images"][].uid 指向它，作为「chunk → 缓存行」的关联依据；
+      **不绑 chunk_id** —— 一张图可被多个 chunk / 文档引用，而 chunk 行每次索引
+      都被整体删后重建（主键会变），绑上去必然失效。存量行允许为 NULL（懒补）。
+    - source_ref：图片地址 —— 远程存完整 URL；本地存**相对 vault 根的 POSIX 路径**；
+      data: 内联图无外部地址，存空串
+    - width / height / size_bytes：本地图尺寸与字节数（远程图不校验，为 NULL）
+    - 唯一约束 (user_id, content_key)：同一内容同一用户只存一份
+    """
+
+    __tablename__ = "image_cache"
+    __table_args__ = (
+        UniqueConstraint("user_id", "content_key", name="uq_image_cache_user_key"),
+        # uid 唯一：用 Index 而非 UniqueConstraint —— 名字可显式指定，
+        # 与 init_db 补列逻辑里的 CREATE UNIQUE INDEX IF NOT EXISTS 同名，保证幂等
+        Index("uq_image_cache_uid", "uid", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, default="default")
+    # 允许 NULL：老库补列时存量行只能为 NULL（SQLite 的 UNIQUE 索引允许多个 NULL）
+    uid: Mapped[str] = mapped_column(String, nullable=True)
+    source_kind: Mapped[str] = mapped_column(String, default="local")
+    source_ref: Mapped[str] = mapped_column(String, default="")
+    content_key: Mapped[str] = mapped_column(String)
+    processor: Mapped[str] = mapped_column(String, default="llm-vision")
+    content: Mapped[str] = mapped_column(String, default="")
+    model: Mapped[str] = mapped_column(String, default="")
+    width: Mapped[int] = mapped_column(Integer, nullable=True)
+    height: Mapped[int] = mapped_column(Integer, nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[DateTime] = mapped_column(DateTime, server_default=func.now())
 
 
 class SyncRun(Base):

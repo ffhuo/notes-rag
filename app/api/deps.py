@@ -10,7 +10,7 @@
 主要函数：
 - get_settings() -> Settings
 - get_vector_store(collection_name=None) -> VectorStore
-- resolve_embed_runtime(session, settings, user_id, vault)
+- resolve_embed_runtime(session, user_id, vault)
       -> tuple[ModelRuntime, int]：按 vault 已建索引的模型解析，含跨模型兼容守卫
 
 关联方案：docs/design.md §1（依赖原则）、§2（api/deps.py）、§18.2（embedding 与 vault 绑定）。
@@ -65,7 +65,6 @@ def get_vector_store(collection_name: str | None = None) -> VectorStore:
 
 async def resolve_embed_runtime(
     session: AsyncSession,
-    settings: Settings,
     user_id: str,
     vault: Vault | None = None,
 ) -> "tuple[ModelRuntime, int]":
@@ -96,7 +95,7 @@ async def resolve_embed_runtime(
 
     try:
         profile = await model_service.resolve_profile(
-            session, settings, "embed", ref=ref, user_id=user_id
+            session, "embed", ref=ref, user_id=user_id
         )
     except ModelNotConfigured:
         raise HTTPException(

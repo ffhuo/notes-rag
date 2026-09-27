@@ -148,7 +148,7 @@ def split_markdown(
 
     for (level, title, body), breadcrumb in zip(sections, breadcrumbs):
         # 去掉标题行，获取纯正文 + 正文在原文中的偏移
-        body_clean, body_offset = _strip_headings_get_offset(body, headings, text)
+        body_clean, body_offset = _strip_headings_get_offset(body, text)
         if not body_clean.strip():
             continue
 
@@ -584,7 +584,6 @@ def _build_breadcrumbs(
 
 def _strip_headings_get_offset(
     section_body: str,
-    _headings: list[HeadingMatch],
     full_text: str,
 ) -> tuple[str, int]:
     """去掉 section 中的标题行，返回 (纯正文, 正文在原文中的起始偏移)。

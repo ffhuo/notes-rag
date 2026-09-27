@@ -9,7 +9,6 @@ from loguru import logger
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi.middleware.cors import CORSMiddleware
 
 class LoggingMiddleware(BaseHTTPMiddleware):
     """

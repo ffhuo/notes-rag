@@ -4,7 +4,7 @@
 - 将用户查询转为向量（embedder.embed_one）
 - 按 (vault_id, embed_profile_id) 定位向量集合（向量空间与模型强绑定，见 §18.2）
 - 向量库检索 Top-K 命中，并按阈值过滤低分噪声
-- 组装含来源路径 / 标题 / 分数 / 片段内容的 ChunkHit 列表
+- 组装含来源路径 / 标题 / 分数 / 片段内容 / 片段内图片信息（images）的 ChunkHit 列表
 - **embedding 与 vault 绑定**：embed_profile_id 由调用方按 vault.embed_profile_id 解析，
   并经 model_service.assert_embed_compatible 守卫（见 §18.2），不可由请求随意指定
 
@@ -14,6 +14,8 @@
 
 关联方案：docs/design.md §4.2（Search 时序）、§9（Phase 2）、§18（多模型）。
 """
+import json
+
 from loguru import logger
 
 from app.core.config import settings
@@ -89,6 +91,7 @@ async def retrieve(
                 title=str(meta.get("title", "")),
                 content=h.get("document", ""),
                 score=float(h.get("score", 0.0)),
+                images=_parse_images(meta.get("images")),
             )
         )
 
@@ -99,3 +102,19 @@ async def retrieve(
         model=embed_runtime.model,
     )
     return hits
+
+
+def _parse_images(raw) -> list[dict]:
+    """chunk.metadata["images"] → list[dict]（无图 / 非法值一律按空列表处理）。
+
+    Chroma 只接受基本类型，ingest 阶段已把它 JSON 字符串化。解析失败只丢图片溯源
+    信息，绝不能让一条坏 metadata 打断整次检索。
+    """
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]

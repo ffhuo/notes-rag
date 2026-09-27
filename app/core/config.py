@@ -43,14 +43,22 @@ class Settings(BaseSettings):
     version: str = "0.1.0"
 
     # ===== 摄取过滤（多格式 / 文件夹过滤，见 docs/design.md §16）=====
-    # 一期仅 md / txt；PDF / Word / Excel 等随 parser 实现启用（pyproject 可选依赖 docs 组）
-    ingest_exts: StrList = ["md", "txt"]
+    # Word(.docx) / PDF 已启用（python-docx、pymupdf 为主依赖）；Excel 随 parser 实现启用
+    ingest_exts: StrList = ["md", "txt", "docx", "pdf"]
     # 默认排除目录：避免构建产物 / 版本控制 / 应用配置 / 缓存等无关目录灌库
     ingest_exclude_dirs: StrList = [
         "node_modules", ".git", ".obsidian", ".trash", "__pycache__", ".venv",
     ]
     # 单文件字节上限（过滤第 5 步 + 变更判据）；请求级 IngestFilters.max_file_size 可覆盖
     max_file_size: int = 10 * 1024 * 1024
+
+    # ===== 图片处理（多模态索引，见 docs/design.md 图片方案）=====
+    # 是否处理图片不由开关决定：仅当解析到的 LLM 配置 params.multimodal 为真时才处理。
+    # 以下四个阈值仅约束**本地图片**（远程 http/https 外链直接原样交给模型，不下载、不校验）。
+    image_min_width: int = 200        # 本地图最小宽度（px），小于则忽略
+    image_min_height: int = 200       # 本地图最小高度（px），小于则忽略
+    image_max_bytes: int = 5 * 1024 * 1024   # 单张本地图字节上限，超过则忽略
+    image_max_per_doc: int = 20       # 单文档最多处理的图片数，超出部分忽略
 
     # ===== 同步与作业（变更管理，见 M03 §8 与 §5.8–§5.13）=====
     # 定时同步：0 = 关闭；>0 为间隔秒数（如 300 = 每 5 分钟对全部 vault 提交增量作业）

@@ -3,7 +3,7 @@
 > 知识库智能应用（RAG）—— 把 Markdown / 纯文本笔记（Obsidian vault 或任意目录）变成可检索、可问答的 **Web 应用**（后端 API + 前端页面）。
 > vault 在前端页面配置（添加本地目录 / 上传 vault 压缩包），是否支持多用户由配置开关决定（默认单用户）。
 > 可配置**多个 LLM / 多个 Embedding**并在使用时选择：LLM 每次请求可换；Embedding 与索引绑定，换模型需重建索引（详见设计文档库 **M08 多模型管理**）。
-> 一期支持 `.md` / `.txt`；PDF / Word / Excel 等多格式解析与文件/文件夹过滤已在设计层预留（详见 **M11 多格式解析与过滤**）。
+> 已支持 `.md` / `.txt` / `.docx` / `.pdf` 解析（PDF 扫描件走多模态 LLM 识别）与文件/文件夹过滤；Excel 已在设计层预留（详见 **M11 多格式解析与过滤**）。
 > 本项目提供分层架构骨架与完整方案文档：`docs/design.md` 是**大纲与基础介绍**（架构 / 目录 / 选型 / 总览 / 里程碑 / 全局约定 / 模块索引），**模块级详细方案**在 `personal-lib/00-Projects/notes-rag-design/` 下按实现优先级排列。业务逻辑可按这些文档手写实现，适合练手，也适合作为自托管知识库服务直接部署。
 
 ## 交互 Demo（不写代码也能看到全貌）
@@ -43,7 +43,7 @@ notes-rag/
 │   ├── repositories/        # 数据访问（note / conversation / vault / model / sync_runs 作业记录）
 │   ├── models/              # Pydantic schemas + ORM（users / vaults / model_profiles / notes / chunks / conversations / messages / sync_runs）
 │   ├── rag/                 # chunker / embedder / vectorstore / llm_client
-│   ├── parsers/             # 多格式解析层（md/txt 一期，pdf/docx/xlsx 预留，见 M03 / M11）
+│   ├── parsers/             # 多格式解析层（md/txt/docx/pdf 已实现，xlsx 预留，见 M03 / M11）
 │   ├── mcp/                 # MCP server（Agent 接入，见 M09）
 │   └── static/              # 前端构建产物（由 frontend/ 构建产出，gitignore）
 ├── frontend/                # 新增：Vue 3 + Vite SPA 源码（Vault 管理 / 检索 / 问答，见 M07）

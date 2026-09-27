@@ -35,11 +35,11 @@ async def stream_chat(
         文本片段（delta content），供 SSE 对外推送
 
     Raises:
-        ValueError: runtime 缺少必要字段
+        ValueError: runtime 缺少 model
         RuntimeError: LLM 请求失败
     """
-    if not runtime.base_url or not runtime.model:
-        raise ValueError("runtime 缺少 base_url 或 model")
+    if not runtime.model:
+        raise ValueError("runtime 缺少 model")
 
     model = runtime.model
     temperature = runtime.params.get("temperature", 0.7)
@@ -96,8 +96,8 @@ async def chat(
     Returns:
         模型返回的完整文本
     """
-    if not runtime.base_url or not runtime.model:
-        raise ValueError("runtime 缺少 base_url 或 model")
+    if not runtime.model:
+        raise ValueError("runtime 缺少 model")
 
     model = runtime.model
     temperature = runtime.params.get("temperature", 0.7)

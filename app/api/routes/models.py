@@ -30,8 +30,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user_id, get_settings
-from app.core.config import Settings
+from app.api.deps import get_current_user_id
 from app.core.database import get_session
 from app.models import ModelProfile
 from app.models.schemas import (
@@ -104,7 +103,6 @@ async def create_model(
     payload: ModelProfileCreate,
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ):
     """新增模型配置（同名同 kind 已存在 → 409；set_default=true 时同时设为默认）。"""
     _require_kind(payload.kind)
@@ -115,7 +113,7 @@ async def create_model(
             status_code=409, detail=f"同 kind 下已存在同名配置：{payload.name!r}"
         )
 
-    return await model_service.create_model(session, settings, user_id, payload)
+    return await model_service.create_model(session, user_id, payload)
 
 
 @router.post("/test", response_model=ModelTestResult)
@@ -202,7 +200,7 @@ async def set_default_model(
 ):
     """把该配置设为所属 kind 的默认项（同 kind 旧默认自动取消）。"""
     profile = await _get_or_404(session, model_id, user_id)
-    return await model_service.set_default(session, user_id, profile.kind, profile)
+    return await model_service.set_default(session, profile)
 
 
 @router.post("/{model_id}/test", response_model=ModelTestResult)

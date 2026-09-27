@@ -106,6 +106,26 @@ export async function useApiKey(key) {
   }
 }
 
+/**
+ * 是否需要显示「退出登录」入口：只有**有凭据可清**才有意义。
+ * 依赖 status 而非仅 multiuser —— 单用户填 API Key 后 multiuser 不变，
+ * 不把 status 纳入依赖则 computed 不重算，填完 key 也看不到退出入口。
+ */
+export const canLogout = computed(() => {
+  if (state.status !== 'ok') return false
+  return state.multiuser || hasApiKey()
+})
+
+/**
+ * 退出登录：丢掉本地凭据并收回界面，由 AuthGate 接管（多用户回登录框、单用户回填 key 框）。
+ * 后端无 logout 端点也不需要 —— JWT 无状态，客户端不再持有即视为退出。
+ */
+export function logout() {
+  clearCredentials()
+  state.user = null
+  state.status = state.multiuser ? 'login' : 'api-key'
+}
+
 let watching = false
 
 /** 监听全局 401：令牌失效时收回界面并重新弹窗（幂等）。 */

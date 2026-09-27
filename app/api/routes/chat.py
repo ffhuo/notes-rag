@@ -22,10 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import (
     get_current_user_id,
     get_session,
-    get_settings,
     resolve_embed_runtime,
 )
-from app.core.config import Settings
 from app.models.schemas import ChatRequest
 from app.repositories import vault_repo
 from app.services import chat_service, model_service
@@ -51,7 +49,7 @@ def _sse(event: str, data) -> str:
 
 
 async def _resolve_llm(
-    session: AsyncSession, settings: Settings, user_id: str, ref: str | None
+    session: AsyncSession, user_id: str, ref: str | None
 ) -> "object":
     """解析本次问答用哪个 LLM：ref（name 或 id）→ 该 kind 的默认项。
 
@@ -59,7 +57,7 @@ async def _resolve_llm(
     """
     try:
         profile = await model_service.resolve_profile(
-            session, settings, "llm", ref=ref, user_id=user_id
+            session, "llm", ref=ref, user_id=user_id
         )
     except ModelNotConfigured:
         raise HTTPException(
@@ -76,7 +74,6 @@ async def chat(
     req: ChatRequest,
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     """检索增强问答（SSE）。
 
@@ -109,9 +106,9 @@ async def chat(
                 status_code=404, detail=f"vault_id={vault_id} 不存在或不属于当前用户"
             )
 
-    llm_runtime = await _resolve_llm(session, settings, user_id, req.llm_profile)
+    llm_runtime = await _resolve_llm(session, user_id, req.llm_profile)
     embed_runtime, embed_profile_id = await resolve_embed_runtime(
-        session, settings, user_id, vault
+        session, user_id, vault
     )
 
     async def event_stream():

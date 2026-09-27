@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from loguru import logger
@@ -36,10 +37,16 @@ from app.rag.chunker import Chunk as ChunkData
 from app.rag.embedder import embed
 from app.rag.vectorstore import VectorStore
 from app.repositories import note_repo
+from app.services import image_service
 from app.services.model_service import collection_name
 
 # 扩展名 → chunker 格式（决定是否按标题切分）
-_FMT_BY_EXT = {".md": "markdown", ".markdown": "markdown", ".html": "html", ".htm": "html"}
+# .docx / .pdf 也走 markdown：解析器输出的就是 markdown 语法（标题 / 页码 → # 前缀），
+# 走 markdown 模式才能按小节切分并生成面包屑
+_FMT_BY_EXT = {
+    ".md": "markdown", ".markdown": "markdown", ".html": "html", ".htm": "html",
+    ".docx": "markdown", ".pdf": "markdown",
+}
 
 # .env 种子运行时（无 ModelProfile 行）在集合命名中的 profile 占位
 ENV_PROFILE_PLACEHOLDER = "env"
@@ -47,6 +54,25 @@ ENV_PROFILE_PLACEHOLDER = "env"
 
 def _chunk_format(suffix: str) -> str:
     return _FMT_BY_EXT.get(suffix.lower(), "text")
+
+
+# 正文里的图片语法 ![alt](target)：图片处理成功时会被替换成 IMAGE_START/END 描述块，
+# 所以「只剩图片语法、没有任何文字」的 chunk 说明图片没被处理（未配置多模态 / 处理失败 / 图不可用）
+_IMAGE_SYNTAX_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+
+
+def _is_image_shell(chunk: ChunkData) -> bool:
+    """该 chunk 是否「只剩图片语法」—— 剥掉面包屑前缀与图片语法后没有任何实质文字。
+
+    专治扫描件 PDF：未配置多模态 LLM 时每页的正文就剩 `![图片](pdf-image:N)`，
+    这种 chunk 若入库，检索会召回一堆无信息量的命中。
+    """
+    text = chunk.text
+    breadcrumb = chunk.metadata.get("breadcrumb")
+    if breadcrumb:
+        # chunker 把面包屑作为上下文前缀写进了正文（见 rag/chunker.py split_markdown）
+        text = text.removeprefix(f"[{breadcrumb}]\n")
+    return not _IMAGE_SYNTAX_RE.sub("", text).strip()
 
 
 def _resolve_profile_id(vault: Vault, embed_profile_id: int | str | None) -> int | str:
@@ -72,11 +98,16 @@ async def index_file(
     embed_runtime: ModelRuntime | None = None,
     embed_profile_id: int | str | None = None,
     max_chars: int = 800,
+    image_runtime: ModelRuntime | None = None,
 ) -> int:
     """索引单个文件，返回分块数。实现 = 文件级替换（先算后改，再清旧写新）。
 
     顺序刻意「先计算、后变更」：解析/分块/嵌入成功前不动任何旧数据，
     避免一次失败的重索引把原有可检索内容删掉（M03 ADR-8）。
+
+    image_runtime 为支持图片输入的多模态 LLM 时，分块后逐 chunk 把图片转成文字回插正文，
+    并把图片溯源信息（uid / 图片地址 / 原始语法 / 偏移）写进 chunk.metadata["images"]，
+    随向量 metadata 一起落到 Chroma；否则（None / 非多模态）跳过图片处理，仅按原文入库。
     """
     if embed_runtime is None:
         raise ValueError("index_file 需要 embed_runtime")
@@ -90,12 +121,28 @@ async def index_file(
         logger.warning("无可用解析器，跳过", vault_id=vault.id, path=rel_path)
         return 0
 
+    # 1.5) 分块：对**原始内容**切分。图片处理必须放在切分之后 —— 若先替换整篇再切分，
+    # 「哪个 chunk 含哪张图」的位置信息在切分前就永久丢失（见 image_service.attach_images）
     chunks: list[ChunkData] = doc.to_chunks(
         fmt=_chunk_format(local_path.suffix),
         max_chars=max_chars,
     )
     if not chunks:
         logger.info("文件无有效内容，跳过", vault_id=vault.id, path=rel_path)
+        return 0
+
+    # 1.6) 图片处理：逐 chunk 回插描述，并把溯源信息写进 chunk.metadata["images"]
+    # （未启用多模态时直接返回，chunk 保持原样）
+    await image_service.attach_images(
+        chunks, doc.images, local_path, rel_path, vault, image_runtime
+    )
+
+    # 1.7) 丢弃空壳 chunk：图片没被处理时，纯图片段（如扫描件 PDF 的整页图）会剩下一段
+    # 剥掉标记后没有任何文字的正文，入库只会污染检索结果。必须在图片处理**之后**判断 ——
+    # 处理成功时标记已被替换成文字描述，就不会被判为空壳。
+    chunks = [chunk for chunk in chunks if not _is_image_shell(chunk)]
+    if not chunks:
+        logger.info("图片处理后可检索内容为空，跳过", vault_id=vault.id, path=rel_path)
         return 0
 
     # 2) 嵌入（最易失败的一步，放在任何写操作之前）
@@ -125,6 +172,7 @@ async def index_file(
             size_bytes=stat.st_size,
             mtime_ns=stat.st_mtime_ns,
             content_hash=content_hash,
+            user_id=vault.user_id,
         )
 
         # 5) 组装向量负载与 chunks 行数据（纯数据，ORM 构造在 note_repo 内）

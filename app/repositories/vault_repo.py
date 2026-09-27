@@ -27,7 +27,7 @@ import json
 from sqlalchemy import select, delete as sa_delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Vault, User, Note, Chunk
+from app.models import Vault, User, Note, Chunk, SyncRun
 
 
 async def create_vault(
@@ -147,15 +147,41 @@ async def touch_embed_state(
 
 
 async def delete_vault(session: AsyncSession, vault_id: int, user_id: str) -> None:
-    """删除 vault 及其关联 notes / chunks 行。"""
+    """删除 vault 及其关联 notes / chunks / sync_runs 行。
+
+    作业记录**必须**一并清掉：vault 删除后残留的 run 行永远不会被任何查询引用
+    （list_sync_runs 按 vault_id 过滤），只会成为孤儿数据。
+    会话（conversations.vault_id）刻意不处理 —— 会话是用户资产，保留历史可读；
+    外键当前未开启，悬空引用不会报错。
+
+    notes / chunks **按 vault_id 全删**，不能按 notes.user_id 过滤：旧版本
+    upsert_note 未写归属，历史 notes 落为 'default'，按 user_id 过滤会整片漏删；
+    而 vaults.id 并无 AUTOINCREMENT（id 会复用，见 core/database.init_db），
+    残留行随后被新建的同 id vault「继承」，sync 对账判它们 unchanged →
+    向量库为空而 DB 有 chunks，检索恒返回空。vault_id 本身即租户边界，
+    其归属已由路由层 _get_vault_or_404 校验。
+    """
+    # 归属前置校验：下面 notes / chunks 按 vault_id 全删（理由见上），
+    # 所以必须先确认该 vault 属于此 user，否则一次传错 user_id 的调用
+    # 就会删掉别人的笔记、只留下 vault 行。
+    owned = await session.execute(
+        select(Vault.id).where(Vault.id == vault_id, Vault.user_id == user_id)
+    )
+    if owned.scalar_one_or_none() is None:
+        return
+
     # 先删 chunks（外键关联 note_id）
-    note_ids = select(Note.id).where(Note.vault_id == vault_id, Note.user_id == user_id)
+    note_ids = select(Note.id).where(Note.vault_id == vault_id)
     await session.execute(
         sa_delete(Chunk).where(Chunk.note_id.in_(note_ids))
     )
     # 再删 notes
     await session.execute(
-        sa_delete(Note).where(Note.vault_id == vault_id, Note.user_id == user_id)
+        sa_delete(Note).where(Note.vault_id == vault_id)
+    )
+    # 作业记录（孤儿 run 的源头）
+    await session.execute(
+        sa_delete(SyncRun).where(SyncRun.vault_id == vault_id, SyncRun.user_id == user_id)
     )
     # 最后删 vault
     await session.execute(

@@ -28,7 +28,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { audioApi, conversationsApi, modelsApi, vaultsApi } from '../api'
 import { copyText } from '../clipboard'
 import { relativeTime } from '../jobs'
-import { isMarkdownPath, toPlainText } from '../markdown'
+import { imageMarkersToText, isMarkdownPath, toPlainText } from '../markdown'
 import { describeRecorderError, isRecorderSupported, startRecording } from '../recorder'
 import { isSpeechSupported, speak, stopSpeaking } from '../speech'
 import { chatTransport } from '../transport/chat'
@@ -356,7 +356,9 @@ async function stopAndTranscribe() {
 
   transcribing.value = true
   try {
-    const r = await audioApi.transcribe(clip.blob, clip.filename)
+    // 固定传 zh：百炼 qwen3-asr-flash 明确说「已知语种时指定可提升准确率」，
+    // OpenAI 协议侧该参数是标准字段（不支持的实现会静默忽略，无副作用）
+    const r = await audioApi.transcribe(clip.blob, clip.filename, { language: 'zh' })
     const text = (r?.text || '').trim()
     if (!text) {
       toast.info('没有识别到内容，靠近麦克风再说一次试试')
@@ -656,8 +658,8 @@ async function openConversation(id) {
                         class="chat__source-excerpt"
                         :class="{ 'chat__source-excerpt--plain': !isMarkdownPath(s.file_path) }"
                       >
-                        <AppMarkdown v-if="isMarkdownPath(s.file_path)" :source="s.content" />
-                        <template v-else>{{ s.content }}</template>
+                        <AppMarkdown v-if="isMarkdownPath(s.file_path)" :source="s.content" :images="s.images" />
+                        <template v-else>{{ imageMarkersToText(s.content, s.images, false) }}</template>
                       </div>
                     </div>
                   </li>

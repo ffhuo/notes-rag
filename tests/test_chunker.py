@@ -638,7 +638,36 @@ class TestImagePreprocessing:
                 doc = MarkdownParser().parse(Path(f.name))
                 # 原文保留图片语法
                 assert "![流程图](img/flow.png)" in doc.content
-                # URL 存入 meta
-                assert "img/flow.png" in doc.meta["images"]
+                # 图片引用存入 images（结构化）
+                assert [r.target for r in doc.images] == ["img/flow.png"]
+                assert doc.images[0].kind == "md"
             finally:
                 os.unlink(f.name)
+
+    def test_three_syntax_kinds(self):
+        """三类图片语法（md / obsidian wikilink / 内联 html）均被提取。"""
+        from app.parsers.markdown import collect_image_refs
+
+        text = (
+            "![外链](https://cdn.example.com/a.png)\n"
+            "![[local.png]]\n"
+            "![[local2.png|300]]\n"
+            "<img src=\"assets/photo.jpg\" alt=\"x\">\n"
+        )
+        refs = collect_image_refs(text)
+        assert [(r.kind, r.target) for r in refs] == [
+            ("md", "https://cdn.example.com/a.png"),
+            ("wiki", "local.png"),
+            ("wiki", "local2.png"),
+            ("html", "assets/photo.jpg"),
+        ]
+        # 纯数字别名（尺寸）不当作 alt
+        assert refs[2].alt == ""
+
+    def test_wikilink_alias_as_alt(self):
+        """Obsidian wikilink 的非数字别名作为 alt。"""
+        from app.parsers.markdown import collect_image_refs
+
+        refs = collect_image_refs("![[diagram.png|架构图]]")
+        assert refs[0].target == "diagram.png"
+        assert refs[0].alt == "架构图"

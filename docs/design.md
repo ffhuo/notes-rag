@@ -24,7 +24,8 @@
 **关键能力一览**：
 
 - 多源 vault 摄取（本地引用 / 上传 zip / git / 远程），支持文件与文件夹过滤
-- 多格式解析（一期 `.md` / `.txt`，PDF / Word / Excel 已预留契约）
+- 多格式解析（`.md` / `.txt` / `.docx` / `.pdf`；Excel 已预留契约）。PDF 支持扫描件：
+  无文本层的页面整页转图后走多模态 LLM 识别，不引入 OCR 引擎
 - **多 LLM / 多 Embedding 可配置可选**（LLM 每次请求可换；Embedding 与索引绑定，换模型需重建索引）
 - 前端 SPA（Vault 管理 / 检索 / 问答 / 模型管理），同源托管单端口
 - 多用户可配置开关（默认个人单用户）
@@ -108,11 +109,12 @@ app/
     embedder.py          # 文本 → 向量（OpenAI 兼容 embedding，async）
     vectorstore.py       # Chroma 封装：add / query / reset
     llm_client.py        # LLM 调用（chat.completions.create, stream=True）
-  parsers/               # 多格式解析层（一期仅 md/txt，其余预留）
+  parsers/               # 多格式解析层（已实现 md/txt/docx/pdf，excel 预留）
     base.py              # DocumentParser 抽象基类 + ParsedDocument（含自注册）
     registry.py          # register / get_parser
     markdown.py · text.py            # 一期实现
-    pdf.py · docx.py · excel.py      # 预留（依赖可选，见 pyproject 的 docs extra）
+    docx.py · pdf.py                 # 已实现（python-docx / pymupdf，主依赖）
+    excel.py                         # 预留（依赖可选，见 pyproject 的 docs extra）
   mcp/
     server.py            # MCP server（stdio / Streamable HTTP），把 services 封装成 tools  ← 手写
   static/                # 构建后的前端静态产物（由 frontend/ 构建产出，gitignore）
@@ -331,7 +333,7 @@ sync_runs(id PK, user_id, vault_id, trigger, mode, dry_run,
 | 分组 | 字段 |
 |---|---|
 | 运行 | `DEBUG`、`VERSION` |
-| 摄取过滤 | `INGEST_EXTS`（默认 `md,txt`）、`INGEST_EXCLUDE_DIRS`（默认排除 `node_modules` / `.git` / `.obsidian` / `.trash` / `__pycache__` / `.venv`） |
+| 摄取过滤 | `INGEST_EXTS`（默认 `md,txt,docx,pdf`）、`INGEST_EXCLUDE_DIRS`（默认排除 `node_modules` / `.git` / `.obsidian` / `.trash` / `__pycache__` / `.venv`） |
 | 变更管理 | `INGEST_SYNC_INTERVAL`（定时同步秒数，0=关）、`INGEST_SYNC_ON_STARTUP`、`INGEST_SETTLE_SECONDS`、`INGEST_MAX_CONCURRENCY`、`PRUNE_ENABLED`、`PRUNE_RATIO_LIMIT`（默认 0.5）、`SYNC_RUNS_KEEP`（默认 50）、`PROGRESS_FLUSH_MS`（进度落库最小间隔，默认 500；阶段跳变与终态强制写）、`WATCH_ENABLED`、`WATCH_DEBOUNCE_MS`、`MAX_FILE_SIZE`（详见 M03 §8 / M01 §5.2） |
 | 存储 | `CHROMA_DIR`、`SQLITE_PATH` |
 | 服务 | `API_KEY`、`CORS_ORIGINS`、`HOST`、`PORT`、`PUBLIC_BASE_URL` |

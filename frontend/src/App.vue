@@ -84,6 +84,13 @@ watch(
       @close-mobile="mobileOpen = false"
     />
 
+    <!-- 侧栏是 fixed（脱离文档流），用同宽占位撑住主区，避免内容被盖住 -->
+    <div
+      class="app-shell__sidebar-holder"
+      :class="{ 'is-collapsed': collapsed && !mobileOpen }"
+      aria-hidden="true"
+    ></div>
+
     <div v-if="mobileOpen" class="app-shell__mask" @click="mobileOpen = false"></div>
 
     <div class="app-main">
@@ -134,6 +141,16 @@ watch(
   left: 0;
   z-index: 20;
   background: var(--color-overlay);
+}
+
+/* 侧栏占位：宽度跟随侧栏折叠态；移动端侧栏是抽屉（不占位） */
+.app-shell__sidebar-holder {
+  flex: 0 0 var(--sidebar-width);
+  width: var(--sidebar-width);
+}
+.app-shell__sidebar-holder.is-collapsed {
+  flex-basis: var(--sidebar-width-collapsed);
+  width: var(--sidebar-width-collapsed);
 }
 
 /* ---------- 主区 ---------- */
@@ -209,6 +226,9 @@ watch(
   }
   .app-topbar__hamburger {
     display: flex;
+  }
+  .app-shell__sidebar-holder {
+    display: none;
   }
   .app-content {
     padding: var(--space-4);

@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,57 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.rag.chunker import Chunk
+
+
+# 等宽字体补充名单（规范化掉空格 / 连字符后精确比较）
+_MONO_EXACT = frozenset({
+    "monaco", "menlo", "hack", "inconsolata", "fira", "cascadiacode",
+    "sourcecodepro", "lucidaconsole", "andale", "ptmono",
+})
+
+
+def is_mono_font(name: str) -> bool:
+    """字体名是否等宽 —— docx（run 字体）与 pdf（span 字体）共用同一判据。
+
+    规范化掉空格 / 连字符后按「mono 结尾 + 补充名单 + 关键词」判断：
+    `endswith("mono")` 而非 `in` —— 等宽字体几乎都以 Mono 收尾（JetBrains Mono、
+    DejaVu Sans Mono…），而 `in` 会把 "Monotype Corsiva" 这类比例字体误判成等宽。
+    """
+    normalized = re.sub(r"[\s\-_]", "", name.lower())
+    if not normalized:
+        return False
+    return (
+        normalized.endswith("mono")
+        or normalized in _MONO_EXACT
+        or "consol" in normalized          # Consolas / Inconsolata
+        or normalized.startswith("courier")
+    )
+
+
+def fence_block(body: str) -> str:
+    """把正文包成 Markdown 围栏代码块；正文自带 ``` 时换 ~~~ 围栏，避免提前闭合。"""
+    marker = "~~~" if "```" in body else "```"
+    return f"{marker}\n{body}\n{marker}"
+
+
+@dataclass
+class ImageRef:
+    """文档中出现的一处图片引用（解析层输出，供 image_service 处理）。
+
+    - raw:     原文中的完整片段（回插时按它做替换）
+    - start:   在 content 中的起始偏移
+    - end:     在 content 中的结束偏移（不含）
+    - alt:     替代文本（Markdown 语法里的 alt，可能为空）
+    - target:  图片目标：http/https URL 或本地路径（相对 md 文件 / Obsidian wikilink 裸名）
+    - kind:    "md"=标准 Markdown 语法；"wiki"=Obsidian wikilink
+    """
+
+    raw: str
+    start: int
+    end: int
+    alt: str
+    target: str
+    kind: str = "md"
 
 
 @dataclass
@@ -34,12 +86,14 @@ class ParsedDocument:
     - title:   标题（文件名或文档内标题）
     - mtime:   修改时间（秒级浮点，用于增量索引）
     - meta:    可选元数据（页数 / sheet 名 / 来源类型等），后续可写入 Chroma metadata 做过滤
+    - images:  文档中出现的图片引用列表（按位置排序），由 image_service 处理后再切分
     """
 
     content: str
     title: str
     mtime: float
     meta: dict = field(default_factory=dict)
+    images: list["ImageRef"] = field(default_factory=list)
 
     def to_chunks(
         self,
@@ -99,10 +153,3 @@ def parse_file(path: Path) -> ParsedDocument | None:
     if parser is None:
         return None
     return parser.parse(path)
-
-
-def supported_extensions() -> list[str]:
-    """返回所有已注册的扩展名列表。"""
-    from app.parsers.registry import _PARSERS
-
-    return sorted(_PARSERS.keys())

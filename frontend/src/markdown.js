@@ -9,8 +9,12 @@
 //   2. 链接协议白名单。marked 内置的 URL 清洗只做 encodeURI，`javascript:` 原样放行。
 import { Marked } from 'marked'
 
-/** 能按 markdown 还原的扩展名；其余一律走纯文本，不走 marked。 */
-const MARKDOWN_EXTS = new Set(['md', 'markdown'])
+/**
+ * 能按 markdown 还原的扩展名；其余一律走纯文本，不走 marked。
+ * docx / pdf 也在内：后端解析器把 Word 正文、PDF 页码小节都转成了 markdown，
+ * 片段内容本身就是 markdown 语法，按扩展名判断即可还原排版。
+ */
+const MARKDOWN_EXTS = new Set(['md', 'markdown', 'docx', 'pdf'])
 
 /** 允许出现在 href 里的协议：其余（javascript:、data:、vbscript:…）降级为纯文本。 */
 const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
@@ -95,8 +99,39 @@ const marked = new Marked({
   },
 })
 
-export function renderMarkdown(source) {
-  return marked.parse(String(source ?? ''))
+/* ---------- 图片回插标记还原 ---------- */
+
+// ingest 阶段把笔记里的图片替换成「<!-- IMAGE_START -->描述<!-- IMAGE_END -->」，并把
+// 图片溯源信息写进 chunk 的 metadata（随检索结果以 hit.images 返回）。标记本身是 HTML
+// 注释，而 renderer.html 会把原始 HTML 转义成字面文本 —— 不还原就会把
+// `<!-- IMAGE_START -->` 直接糊在界面上。
+const IMAGE_BLOCK_RE = /<!--\s*IMAGE_START\s*-->([\s\S]*?)<!--\s*IMAGE_END\s*-->/g
+
+/**
+ * 把图片标记块还原成可读文本。
+ *
+ * @param {string} source 片段正文
+ * @param {Array<object>} images 该片段内的图片信息（后端按出现顺序给出，与标记一一对应）
+ * @param {boolean} quote true=输出 Markdown 引用块（交 marked 继续排版）；
+ *                        false=输出纯文本（非 markdown 片段用）
+ */
+export function imageMarkersToText(source, images = [], quote = true) {
+  const list = Array.isArray(images) ? images : []
+  let i = 0
+  return String(source ?? '').replace(IMAGE_BLOCK_RE, (_match, body) => {
+    const info = list[i++] || {}
+    const desc = String(body ?? '').trim()
+    if (!desc) return ''
+    const label = info.ref ? `图片说明 · ${info.ref}` : '图片说明'
+    if (!quote) return `【${label}】\n${desc}\n\n`
+    // 引用块内每行都要带 "> "，否则多行描述会掉出引用块
+    const lines = [`> ${label}`, ...desc.split('\n').map((line) => `> ${line}`)]
+    return `${lines.join('\n')}\n\n`
+  })
+}
+
+export function renderMarkdown(source, images = []) {
+  return marked.parse(imageMarkersToText(source, images))
 }
 
 /**

@@ -25,15 +25,18 @@ dependencies = [
     # Agent 接入（MCP server，见 docs/design.md §14）；启用前需 `uv sync`
     "mcp>=1.2",
     "loguru>=0.7",
+    # 图片处理（多模态索引）：本地图读取宽高 / 格式校验，见 docs/design.md 图片方案
+    "pillow>=10.0",
+    "python-docx>=1.2.0",
+    "pymupdf>=1.28.2",
 ]
 
 # 可选依赖：多格式文档解析（design.md §16.1）。主线 `uv sync` 不安装；
-# 需要 PDF/Word/Excel 时：`uv add pymupdf python-docx openpyxl` 或 `uv sync --extra docs`
+# 需要 Excel 时：`uv add openpyxl` 或 `uv sync --extra docs`
+# （Word(.docx)、PDF 已实现并升为主依赖，见上方 dependencies）
 [project.optional-dependencies]
 docs = [
-    "pymupdf>=1.24",       # PDF 解析（app/parsers/pdf.py）
-    "python-docx>=1.1",    # Word(.docx) 解析（app/parsers/docx.py）
-    "openpyxl>=3.1",       # Excel(.xlsx) 解析（app/parsers/excel.py）
+    "openpyxl>=3.1",       # Excel(.xlsx) 解析（app/parsers/excel.py，待实现）
 ]
 
 # PEP 735 开发依赖组（不参与生产部署）
@@ -44,6 +47,10 @@ dev = [
     "tenacity>=8.2",
     "rich>=13.0",
 ]
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true
 
 [tool.uv]
 # 本项目是应用而非可发布库，禁止 uv 将自身 editable 安装为包

@@ -6,6 +6,7 @@
 import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { NAV_ITEMS } from '../router'
+import { authState, canLogout, logout } from '../auth'
 import AppIcon from './AppIcon.vue'
 import AppJobStatus from './AppJobStatus.vue'
 import AppThemePicker from './AppThemePicker.vue'
@@ -21,6 +22,9 @@ const emit = defineEmits(['toggle-collapse', 'close-mobile'])
 
 const route = useRoute()
 const items = computed(() => NAV_ITEMS.map((n) => ({ ...n, active: route.name === n.name })))
+
+/** 当前身份名（多用户为账号名；单用户为合成身份 default）。 */
+const userName = computed(() => authState.user?.username || '当前用户')
 </script>
 
 <template>
@@ -66,17 +70,36 @@ const items = computed(() => NAV_ITEMS.map((n) => ({ ...n, active: route.name ==
     <div class="app-sidebar__foot">
       <AppJobStatus :collapsed="collapsed" />
       <AppThemePicker :collapsed="collapsed" />
+
+      <!-- 退出登录：仅在确有凭据可清时出现（单用户免鉴权模式没有账号概念，不显示） -->
+      <div v-if="canLogout" class="app-sidebar__user">
+        <span class="app-sidebar__user-name" :title="userName">{{ userName }}</span>
+        <button
+          type="button"
+          class="app-sidebar__logout"
+          :title="collapsed ? '退出登录' : ''"
+          aria-label="退出登录"
+          @click="logout"
+        >
+          <AppIcon name="logout" :size="18" />
+        </button>
+      </div>
     </div>
   </aside>
 </template>
 
 <style scoped>
 .app-sidebar {
-  flex: 0 0 var(--sidebar-width);
+  /* 桌面：脱离文档流固定在左侧（规范 §6.1：不用 sticky，改 fixed + 占位）。
+     宽度占位由 App.vue 的 .app-shell__sidebar-holder 承担，主内容不会被盖住。 */
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 10;
   width: var(--sidebar-width);
   display: flex;
   flex-direction: column;
-  min-height: 0;
   background: var(--color-bg-surface);
   border-right: var(--border-width) solid var(--color-border);
 }
@@ -218,9 +241,50 @@ const items = computed(() => NAV_ITEMS.map((n) => ({ ...n, active: route.name ==
   padding: 0 var(--space-3) var(--space-3);
 }
 
+/* ---------- 底部：当前身份 + 退出登录 ---------- */
+.app-sidebar__user {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+.app-sidebar__user-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+.app-sidebar__logout {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard),
+              color var(--duration-fast) var(--ease-standard);
+}
+.app-sidebar__logout:hover {
+  background: var(--color-bg-subtle);
+  border-color: var(--color-border);
+  color: var(--color-primary);
+}
+
 /* ---------- 折叠态（T1.3）：宽度瞬变，标签淡出（规范 §2.7 只过渡 opacity/transform） ---------- */
 .app-sidebar.is-collapsed {
-  flex-basis: var(--sidebar-width-collapsed);
   width: var(--sidebar-width-collapsed);
 }
 
@@ -246,16 +310,20 @@ const items = computed(() => NAV_ITEMS.map((n) => ({ ...n, active: route.name ==
   padding: 0 var(--space-2) var(--space-2);
 }
 
+/* 折叠成图标条：只留退出图标（title 提供说明），身份名隐藏 */
+.is-collapsed .app-sidebar__user {
+  justify-content: center;
+  padding: var(--space-2);
+}
+.is-collapsed .app-sidebar__user-name {
+  display: none;
+}
+
 /* ---------- 移动端抽屉（T1.4，sm 断点 0–767px） ----------
-   用 transform 做 off-canvas；.is-collapsed 在此一并归零宽度，
-   否则 (0,2,0) 的折叠规则会压过媒体查询里的 (0,1,0)。 */
+   基础规则已是 fixed，这里只覆盖抽屉态需要的宽度 / 位移 / 层级。 */
 @media (max-width: 767px) {
   .app-sidebar,
   .app-sidebar.is-collapsed {
-    position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
     z-index: 30;
     width: 280px;
     max-width: 84%;

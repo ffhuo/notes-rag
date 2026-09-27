@@ -23,15 +23,13 @@ app/mcp/server.py —— 将本项目的检索 / 问答能力封装为 MCP serve
 
 from __future__ import annotations
 
-import asyncio
 from typing import AsyncIterator
 
 # 启用 MCP 前需 `uv sync`（pyproject 已声明 mcp>=1.2）。
 # 这里用官方 SDK 的 FastMCP 高层封装；如需裸协议可改用 `from mcp.server import Server`。
 from mcp.server.fastmcp import FastMCP
 
-from app.core.config import get_settings  # 依赖注入获取配置
-from app.services import chat_service, ingest_service, retrieval_service
+from app.services import chat_service, retrieval_service, vault_service
 
 
 # ──────────────────────────────────────────────

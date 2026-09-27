@@ -1,13 +1,13 @@
 """业务·模型配置 — 多 LLM / 多 Embedding 的解析与选择（见 design.md §18）。
 
 能力：
-- 解析「本次请求用哪个模型」：请求参数 → 用户默认 → 系统种子（三级，见 §18.3）
+- 解析「本次请求用哪个模型」：显式 ref → 用户默认 → 首条 enabled（见 §18.3）
 - 把 ModelProfile 解析成 ModelRuntime（端点 / 密钥取配置自身值），rag 层只认 ModelRuntime
 - 构造 OpenAI 兼容客户端（AsyncOpenAI），供 embedder / llm_client 使用
 - **embedding 一致性守卫**：检索必须用「建该 vault 索引时那个」embedding，换模型需先重建索引（§18.2）
 
 主要函数：
-- async def resolve_profile(session, settings, kind, ref=None, user_id="default") -> ModelProfile
+- async def resolve_profile(session, kind, ref=None, user_id="default") -> ModelProfile
 - def to_runtime(profile) -> ModelRuntime
 - def build_client(runtime) -> AsyncOpenAI
 - def assert_embed_compatible(vault, profile) -> None
@@ -22,7 +22,6 @@ import time
 
 from pydantic import SecretStr
 
-from app.core.config import Settings
 from app.models import ModelProfile, Vault
 from app.models.schemas import (
     ModelProfileCreate,
@@ -31,7 +30,7 @@ from app.models.schemas import (
     ModelRuntime,
     ModelTestResult,
 )
-from app.rag.client import build_client  # noqa: F401  re-export，供其他 service 使用
+from app.rag.client import build_client
 from app.rag.embedder import embed_one
 from app.rag.llm_client import chat
 from app.repositories import model_repo
@@ -42,7 +41,7 @@ class ModelNotFound(Exception):
 
 
 class ModelNotConfigured(Exception):
-    """该 kind 一个可用配置都没有（既无 profile，也无法从 settings 兜底）。"""
+    """该 kind 在 model_profiles 表里一个可用配置都没有。"""
 
 
 class EmbedModelMismatch(Exception):
@@ -63,12 +62,11 @@ def mask_api_key(key: str) -> str:
     return f"{key[:4]}****{key[-2:]}"
 
 
-# ===== 解析（三级：ref → 默认 → 兜底）=====
+# ===== 解析（显式 ref → 默认 → 首条 enabled）=====
 
 
 async def resolve_profile(
     session,
-    settings: Settings,
     kind: str,
     ref: str | None = None,
     user_id: str = "default",
@@ -122,17 +120,61 @@ def to_runtime(profile: ModelProfile) -> ModelRuntime:
     )
 
 
+def indexed_profile_ids(vault: Vault) -> list:
+    """vault.embed_indexed_profiles（JSON 字符串）→ id 列表；非法值按空处理。
+
+    空列表表示「该 vault 从未成功建过索引」（该字段只在作业 success / partial 后回写，ADR-9）。
+    """
+    try:
+        raw = json.loads(vault.embed_indexed_profiles or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return raw if isinstance(raw, list) else []
+
+
 def assert_embed_compatible(vault: Vault, profile: ModelProfile) -> None:
     """检索前守卫：vault 必须用该 embedding 模型建过索引，否则抛 EmbedModelMismatch。
 
-    判定：profile.id ∈ json.loads(vault.embed_indexed_profiles or "[]")
+    判定：profile.id ∈ vault.embed_indexed_profiles。
+    反之，**从未建过索引**（列表为空）时本守卫恒不通过 —— 那种情况属「首次建索引」，
+    调用方（提交侧 sync）应自行跳过本守卫，否则首次索引永远起不来。
     """
-    indexed = json.loads(vault.embed_indexed_profiles or "[]")
+    indexed = indexed_profile_ids(vault)
     if profile.id not in indexed:
         raise EmbedModelMismatch(
             f"vault(id={vault.id}) 未用 embedding(id={profile.id}, name={profile.name!r}) 建过索引；"
             f"已建索引的 profile ids: {indexed}。请先 reindex。"
         )
+
+
+def profile_supports_image(profile: ModelProfile) -> bool:
+    """该 LLM 配置是否支持图片输入（唯一判据：params.multimodal 为真）。"""
+    if profile.kind != "llm":
+        return False
+    try:
+        params = json.loads(profile.params_json or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return bool(params.get("multimodal"))
+
+
+async def resolve_image_runtime(session, user_id: str) -> ModelRuntime | None:
+    """解析用于图片理解的多模态 LLM 运行时；没有则返回 None（调用方跳过图片处理）。
+
+    优先级：默认 LLM（若支持图片）→ 任一启用的多模态 LLM。
+    与 resolve_profile 的区别：这里**不抛 ModelNotConfigured** ——
+    图片处理是增强能力，缺配置只跳过，绝不让文件索引失败。
+    """
+    profiles = await model_repo.list_profiles(session, user_id, "llm", only_enabled=True)
+    if not profiles:
+        return None
+    default = next((p for p in profiles if p.is_default), None)
+    if default is not None and profile_supports_image(default):
+        return to_runtime(default)
+    for p in profiles:
+        if profile_supports_image(p):
+            return to_runtime(p)
+    return None
 
 
 # ===== CRUD 编排 =====
@@ -178,7 +220,7 @@ async def list_models(session, user_id: str, kind: str | None = None) -> list[Mo
 
 
 async def create_model(
-    session, settings: Settings, user_id: str, data: ModelProfileCreate
+    session, user_id: str, data: ModelProfileCreate
 ) -> ModelProfileOut:
     """创建模型配置。base_url / api_key 为空是允许的：base_url 空 = OpenAI 官方端点，
     api_key 空 = 不带鉴权（第三方服务通常必填）。"""
@@ -233,7 +275,7 @@ async def delete_model(session, profile: ModelProfile) -> None:
     await model_repo.delete_profile(session, profile)
 
 
-async def set_default(session, user_id: str, kind: str, profile: ModelProfile) -> ModelProfileOut:
+async def set_default(session, profile: ModelProfile) -> ModelProfileOut:
     """设为该 kind 的默认项。"""
     await model_repo.set_default(session, profile)
     return _to_out(profile)

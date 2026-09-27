@@ -52,7 +52,6 @@ class IngestRequest(BaseModel):
     vault_path: str | None = None           # 兼容单 vault（等价于 local:<path>）
     vault_sources: List[str] | None = None  # CLI/MCP 一次性摄取传多源（不落库为 vault 实体；前端走 vaults + sync）
     vault_id: str | None = None             # 或指定已存在的 vault（前端走 vaults + sync/reindex，见 §17.2）
-    rebuild: bool = False                   # 兼容保留；等价于 mode="rebuild"
     # 变更管理（见 M03 §5.8–§5.10）：
     #   mode="sync"    增量对账（新增/修改/删除/改名），日常用这个
     #   mode="rebuild" 全量重建（换 embedding / 改分块参数 / 索引疑似损坏）
@@ -223,11 +222,20 @@ class SearchRequest(BaseModel):
 
 
 class ChunkHit(BaseModel):
+    """检索命中的片段。
+
+    images 来自 chunk.metadata["images"]（ingest 阶段写入），描述**本片段内含**的图片：
+    uid（关联 image_cache 行的溯源依据）/ ref（图片地址：URL 或相对 vault 根的路径）/
+    kind（local|remote）/ raw（原始图片语法，供回填）/ alt / offset（片段内偏移）/ model。
+    无图片段为空列表（pydantic v2 会为每个实例新建 list，不存在共享可变默认值问题）。
+    """
+
     note_id: str
     file_path: str
     title: str
     content: str
     score: float
+    images: list[dict] = []
 
 
 class SearchResponse(BaseModel):

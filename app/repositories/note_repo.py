@@ -8,7 +8,7 @@
 
 主要函数：
 - list_note_paths(session, vault_id) -> dict[str, Note]: 对账的 known 集合 {相对路径: Note}
-- upsert_note(session, vault_id, rel_path, title, size_bytes, mtime_ns, content_hash) -> Note
+- upsert_note(session, vault_id, rel_path, title, size_bytes, mtime_ns, content_hash, user_id) -> Note
 - replace_chunks(session, note_id, chunks) -> None: 文件级替换
 - get_note_by_path(session, vault_id, rel_path) -> Note | None
 - delete_note_cascade(session, note_id) -> None: 删 chunks + notes
@@ -62,8 +62,12 @@ async def upsert_note(
     size_bytes: int,
     mtime_ns: int,
     content_hash: str,
+    user_id: str,
 ) -> Note:
     """写入 / 更新一条笔记元数据（含变更判据字段），返回 Note。
+
+    user_id 必填且与 vault.user_id 一致：历史版本漏写该字段（落为 "default"），
+    导致 delete_vault 按 user_id 过滤时整片漏删；这里对已存在的行也回写修正。
 
     本函数只负责 notes 行；chunks 行请用 replace_chunks()。
     """
@@ -81,9 +85,11 @@ async def upsert_note(
         note.size_bytes = size_bytes
         note.mtime_ns = mtime_ns
         note.content_hash = content_hash
+        note.user_id = user_id          # 修正历史残留归属（旧版本未写入）
     else:
         # 新建记录
         note = Note(
+            user_id=user_id,
             vault_id=vault_id,
             file_path=rel_path,
             title=title,
