@@ -3,9 +3,9 @@
 能力：
 - 接收 query / conversation_id / top_k / vault_id / llm_profile
 - 以 text/event-stream 流式返回：token 片段 / sources 来源 / done 结束 / error 错误
-- 受 API Key 保护（依赖 get_current_api_key）
+- 受鉴权保护（get_current_user：X-API-Key 或 Bearer JWT，见 §17.3）
 - 用 StreamingResponse 包装 chat_service.stream 的生成器
-- **本次用哪个 LLM**：req.llm_profile（name 或 id）→ 用户默认 → .env 兜底（见 §18.3）
+- **本次用哪个 LLM**：req.llm_profile（name 或 id）→ 用户默认（见 §18.3）；无 llm 配置则 409
 
 主要端点：
 - POST /api/v1/chat → 解析 llm_runtime 后调 chat_service.stream，包装为 SSE
@@ -20,7 +20,6 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
-    get_current_api_key,
     get_current_user_id,
     get_session,
     get_settings,
@@ -33,7 +32,6 @@ from app.services import chat_service, model_service
 from app.services.model_service import (
     ModelNotConfigured,
     ModelNotFound,
-    runtime_from_settings,
     to_runtime,
 )
 
@@ -55,7 +53,7 @@ def _sse(event: str, data) -> str:
 async def _resolve_llm(
     session: AsyncSession, settings: Settings, user_id: str, ref: str | None
 ) -> "object":
-    """解析本次问答用哪个 LLM：ref（name 或 id）→ 默认 → .env 兜底。
+    """解析本次问答用哪个 LLM：ref（name 或 id）→ 该 kind 的默认项。
 
     LLM 无状态耦合，可逐请求自由切换（§18.2），故不做类似 embedding 的兼容守卫。
     """
@@ -64,17 +62,18 @@ async def _resolve_llm(
             session, settings, "llm", ref=ref, user_id=user_id
         )
     except ModelNotConfigured:
-        # 表里没有 llm 配置：用 .env 的 LLM_* 兜底
-        return runtime_from_settings(settings, "llm")
+        raise HTTPException(
+            status_code=409,
+            detail="尚未配置 LLM：请到「模型」页新增一个 kind=llm 的配置",
+        )
     except ModelNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
-    return to_runtime(profile, settings)
+    return to_runtime(profile)
 
 
 @router.post("/chat")
 async def chat(
     req: ChatRequest,
-    _: str = Depends(get_current_api_key),
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -83,6 +82,9 @@ async def chat(
 
     错误策略：参数 / 配置类错误在**建流之前**直接返回 4xx（前端拿状态码即可）；
     生成过程中的异常（LLM 超时等）已在流内，转成 error 事件下发。
+
+    鉴权只用 get_current_user（同时接受 X-API-Key 与 Bearer JWT）；
+    叠加 get_current_api_key（只认 X-API-Key）会让多用户登录态必然 401。
     """
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=422, detail="query 不能为空")

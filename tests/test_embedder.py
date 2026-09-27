@@ -1,26 +1,41 @@
-"""embedder 单元测试 — 使用 .env 中的硅基流动 embedding 配置执行。
+"""embedder 单元测试 — 直连一个真实的 OpenAI 兼容 embedding 端点。
 
 运行方式：
+    TEST_EMBED_BASE_URL=https://api.siliconflow.cn/v1 \
+    TEST_EMBED_API_KEY=sk-xxx \
+    TEST_EMBED_MODEL=BAAI/bge-m3 \
     .venv/bin/python -m pytest tests/test_embedder.py -v -s
 
-需要网络连接和有效的 EMBED_API_KEY。
+未设置上述环境变量时整文件 skip（默认跑测试不需要网络与密钥）。
+
+注意：这里读环境变量**仅为本测试自备凭据**，与运行时配置无关 ——
+运行时的模型配置一律来自 model_profiles 表（§18），不再有 .env 兜底。
 """
 import asyncio
+import os
 
 import pytest
 from pydantic import SecretStr
 
-from app.core.config import settings
 from app.models.schemas import ModelRuntime
 from app.rag.embedder import embed
 
-# 从 .env 配置构建 runtime
+_BASE_URL = os.environ.get("TEST_EMBED_BASE_URL", "")
+_API_KEY = os.environ.get("TEST_EMBED_API_KEY", "")
+_MODEL = os.environ.get("TEST_EMBED_MODEL", "")
+
+pytestmark = pytest.mark.skipif(
+    not (_BASE_URL and _API_KEY and _MODEL),
+    reason="未设置 TEST_EMBED_BASE_URL / TEST_EMBED_API_KEY / TEST_EMBED_MODEL，跳过联网用例",
+)
+
+# 由上述环境变量构建 runtime
 _runtime = ModelRuntime(
     kind="embed",
-    name="test-siliconflow",
-    base_url=settings.get_embed_base_url(),
-    api_key=settings.get_embed_api_key(),
-    model=settings.embed_model,
+    name="test-embed",
+    base_url=_BASE_URL,
+    api_key=SecretStr(_API_KEY),
+    model=_MODEL,
     params={"timeout": 30},
 )
 

@@ -322,21 +322,15 @@ sync_runs(id PK, user_id, vault_id, trigger, mode, dry_run,
 
 > 字段级语义、列表字段解析坑、派生方法见 **M01 基础框架与配置**；部署形态相关见 **M10 部署方案**。
 
-**LLM 与 Embedding 分开配置**：
-
-```bash
-# 对话 / 问答
-LLM_BASE_URL=...   LLM_API_KEY=...   LLM_MODEL=...
-# 文本向量化（BASE_URL / API_KEY 留空则回退 LLM 同款，见 M01 §5.3）
-EMBED_BASE_URL=    EMBED_API_KEY=    EMBED_MODEL=...
-```
+**模型配置不在 `.env`**：LLM / Embedding / ASR 三类全部落 `model_profiles` 表，由前端「模型」页
+或 `POST /api/v1/models` 配置（§18）。表为空时问答 / 索引 / 语音转写一律返回 `409` 并提示去配置页 ——
+**没有 `.env` 兜底**，避免同一件事出现两处真相。
 
 **其余分组**：
 
 | 分组 | 字段 |
 |---|---|
 | 运行 | `DEBUG`、`VERSION` |
-| 多模型种子 | `MODEL_PROFILES`（JSON 数组；仅在 `model_profiles` 表为空时注入一次） |
 | 摄取过滤 | `INGEST_EXTS`（默认 `md,txt`）、`INGEST_EXCLUDE_DIRS`（默认排除 `node_modules` / `.git` / `.obsidian` / `.trash` / `__pycache__` / `.venv`） |
 | 变更管理 | `INGEST_SYNC_INTERVAL`（定时同步秒数，0=关）、`INGEST_SYNC_ON_STARTUP`、`INGEST_SETTLE_SECONDS`、`INGEST_MAX_CONCURRENCY`、`PRUNE_ENABLED`、`PRUNE_RATIO_LIMIT`（默认 0.5）、`SYNC_RUNS_KEEP`（默认 50）、`PROGRESS_FLUSH_MS`（进度落库最小间隔，默认 500；阶段跳变与终态强制写）、`WATCH_ENABLED`、`WATCH_DEBOUNCE_MS`、`MAX_FILE_SIZE`（详见 M03 §8 / M01 §5.2） |
 | 存储 | `CHROMA_DIR`、`SQLITE_PATH` |
@@ -346,8 +340,8 @@ EMBED_BASE_URL=    EMBED_API_KEY=    EMBED_MODEL=...
 
 **四条容易踩的配置规则**：
 
-1. **列表字段支持两种写法**：`INGEST_EXTS` / `INGEST_EXCLUDE_DIRS` / `MODEL_PROFILES` 用 `Annotated[List[str], NoDecode]` + 自定义校验器，逗号分隔或 JSON 数组都行，空值返回 `[]`（pydantic-settings 默认会先做 JSON 解码，写 `a,b` 会直接 `SettingsError` 崩溃 —— 详见 M01 §5.2）。
-2. **DB 是唯一运行时真相源**：`vaults` / `model_profiles` 表为准。**vault 完全由 DB/API/前端运行时配置，`.env` 不提供 vault 种子**（首次启动 `vaults` 表为空即无 vault，需通过前端或 `POST /vaults` 添加）；`model_profiles` 仍保留 `.env` 的 `MODEL_PROFILES` 作为一次性种子（表空时注入）。
+1. **列表字段支持两种写法**：`INGEST_EXTS` / `INGEST_EXCLUDE_DIRS` 用 `Annotated[List[str], NoDecode]` + 自定义校验器，逗号分隔或 JSON 数组都行，空值返回 `[]`（pydantic-settings 默认会先做 JSON 解码，写 `a,b` 会直接 `SettingsError` 崩溃 —— 详见 M01 §5.2）。
+2. **DB 是唯一运行时真相源**：`vaults` / `model_profiles` 表为准，`.env` **既不提供 vault 种子，也不提供模型配置**（首次启动两表皆空，需通过前端或 API 添加：vault 走 `POST /vaults`，模型走 `POST /models`）。
 3. **`HOST` 默认 `127.0.0.1`**；容器 / 服务端部署必须显式覆盖为 `0.0.0.0`，且**必须**置于反向代理 + HTTPS + API Key 之后。
 4. **删除是一项被护栏约束的操作**：`vault` 文件被删除后，同步时会在三道护栏（源可达 / 扫描完整 / 删除比例 ≤ `PRUNE_RATIO_LIMIT`）通过后才清理索引；想只读镜像（永不删）就把 `PRUNE_ENABLED=false`。详见 M03 ADR-7。
 
@@ -429,7 +423,7 @@ EMBED_BASE_URL=    EMBED_API_KEY=    EMBED_MODEL=...
 | M05 | 问答服务（SSE） | **P4** | Prompt 模板、上下文组装、SSE 事件协议、落库时机、防幻觉 |
 | M06 | Vault 实体化与多用户鉴权 | **P5** | vault 权威性模型、来源类型、上传安全、reindex、多用户开关与升级路径 |
 | M07 | 前端 SPA | **P6** | 页面职责、API 客户端与 SSE 消费、**任务与进度视图**（进度条两形态、阶段中文化、取消交互、轮询策略）、构建与同源托管、多阶段构建 |
-| M08 | 多模型管理 | **P7** | `model_profiles`、LLM/Embedding 差异约束、三级解析、collection 命名、种子注入 |
+| M08 | 多模型管理 | **P7** | `model_profiles`、LLM/Embedding/ASR 差异约束、三级解析、collection 命名、配置页管理（无 `.env` 兜底） |
 | M09 | Agent 接入（MCP / Skill） | **P8** | MCP tools 封装、stdio / Streamable HTTP 取舍、客户端配置、Skill 补充 |
 | M10 | 部署方案 | **P9** | 本地 / Docker、数据卷、反代要点、远程访问强制检查单、容量估算 |
 | M11 | 多格式解析与过滤 | **P10** | 类型矩阵、各格式解析要点、可选依赖、启用路径（仅契约·预留） |
@@ -476,6 +470,7 @@ EMBED_BASE_URL=    EMBED_API_KEY=    EMBED_MODEL=...
 
 | 日期 | 版本 | 变更摘要 |
 |---|---|---|
+| 2026-09-27 | v2.4 | **模型配置与 `.env` 解耦**：删除 `LLM_*` / `EMBED_*` 字段与 `.env` 兜底解析链，模型配置（llm / embed / asr）唯一真相源为 `model_profiles` 表；缺配置一律 `409` 提示去「模型」页；§8 配置总览删 LLM/Embedding 段与 `MODEL_PROFILES` 种子行，配置规则第 1/2 条同步 |
 | 2026-09-24 | v2.3 | **全异步作业模型**：写入类端点一律 `202 + run_id`（否决同步返回与 `wait` 参数）；§5.1 / §5.1.1 数据流改为「提交作业 → 后台推进」；§6 接口总览补 `runs/{rid}` 与 `cancel` 并去掉重复行，新增 `202` / `409` 不排队 / 取消用 `POST` 的契约说明；§7 数据模型补 `sync_runs` 进度列与七态；§8 配置补 `PROGRESS_FLUSH_MS`；§9 里程碑 Phase 1 含作业骨架、Phase 6 六个页面；§10.2 补 4 行风险（超时/断连、同库并发、僵尸作业、模型状态回写）；§11 登记 **M03 §5.13**（含 ADR-12/13/14）与 **M07 §5.4** |
 | 2026-09-23 | v2.0 | 拆分为「大纲（本文）+ 11 个模块文档 + 附录 A」；本文保留项目简介、架构、目录、选型、数据流 / 接口 / 数据模型 / 配置总览、里程碑、全局约定与模块索引；模块级方案迁至 `notes-rag-design/modules/` |
 | 2026-09-23 | v2.1 | 增补**变更管理**索引：§5.1.1 同步流程骨架、§6 接口总览增 `sync` / `runs` / `doctor`、§7 数据模型总览更新表数、模块索引与映射表登记变更管理归属（方案主体 M03 §5.8–§5.12） |

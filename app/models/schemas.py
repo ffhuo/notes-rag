@@ -15,6 +15,8 @@
 - SearchResponse: { hits: list[ChunkHit] }
 - ChatRequest: { query: str, conversation_id: str | None, top_k: int = 5 }
 - ChatEvent: { type: "token"|"sources"|"done", ... }  # SSE 事件载荷
+- ConversationOut / MessageOut：会话历史出参（列表标题 + 会话内消息）
+- TranscribeOut: { text, model, elapsed_ms }  # 语音转文字结果
 - ModelRuntime / ModelProfileCreate / ModelProfileUpdate / ModelProfileOut：多模型配置（§18）
   - ModelRuntime 是解析后的运行时配置，rag 层只依赖它，不反向依赖 service / DB
 - 变更管理（M03 §5.8–§5.12）：
@@ -176,8 +178,8 @@ class SyncRunOut(BaseModel):
     failed_cnt: int = 0
     blocked_reason: str | None = None
     error: str | None = None
-    started_at: str | None = None
-    finished_at: str | None = None
+    started_at: int | None = None           # UTC 毫秒时间戳（前端 new Date(ms) 直接用）
+    finished_at: int | None = None          # 同上；未收尾为 None
     elapsed_ms: int = 0
 
 
@@ -242,15 +244,55 @@ class ChatRequest(BaseModel):
     llm_profile: str | None = None
 
 
+# ===== 对话历史（GET /api/v1/conversations，见 docs/design.md §4.3）=====
+class ConversationOut(BaseModel):
+    """会话列表项。
+
+    title 是**派生值**：取该会话首条 user 提问压平空白后截断（库里没有 title 列）；
+    message_count 为会话内全部消息数（user + assistant）。
+    """
+
+    id: int
+    title: str
+    message_count: int = 0
+    created_at: int | None = None    # UTC 毫秒时间戳（前端 new Date(ms) 直接用）
+
+
+class MessageOut(BaseModel):
+    """会话内的一条消息。
+
+    刻意不含 sources：messages 表只存 role/content，引用片段没有落库，
+    历史回看时看不到当时引用了哪些笔记（见 M07 §5.5 已知边界）。
+    """
+
+    id: int
+    role: str
+    content: str
+    created_at: int | None = None    # UTC 毫秒时间戳
+
+
+# ===== 语音（POST /api/v1/audio/transcribe）=====
+class TranscribeOut(BaseModel):
+    """语音转文字结果。
+
+    text 是**识别原文**（未做任何润色）：它会被填进输入框让用户改错字，
+    不直接发送 —— 语音识别是概率结果，把错字直接发给检索等于把错误放大。
+    """
+
+    text: str
+    model: str = ""
+    elapsed_ms: int = 0
+
+
 # ===== 多模型管理（见 docs/design.md §18）=====
 class ModelRuntime(BaseModel):
     """解析后的运行时模型配置 —— rag 层（embedder / llm_client）唯一依赖的模型对象。
 
     由 model_service.to_runtime(profile) 从 ModelProfile 解析得到：
-    已应用「端点/密钥回退」与默认参数，rag 层不再关心 DB、用户默认、.env 等概念。
+    已带上默认参数，rag 层不再关心 DB、用户默认等概念。
     """
 
-    kind: str                      # llm | embed
+    kind: str                      # llm | embed | asr
     name: str                      # profile 名，便于日志与追踪
     base_url: str
     api_key: SecretStr
@@ -259,13 +301,13 @@ class ModelRuntime(BaseModel):
 
 
 class ModelProfileCreate(BaseModel):
-    """新建一个模型配置（LLM 或 Embedding）。"""
-    kind: str                                   # llm | embed
+    """新建一个模型配置（LLM / Embedding / ASR）。"""
+    kind: str                                   # llm | embed | asr
     name: str                                   # 用户内唯一，如 'qwen-max' / 'bge-m3-local'
     model: str                                  # 模型标识，如 gpt-4o-mini / text-embedding-3-small
     provider: str = "openai"                    # OpenAI 兼容协议（Qwen / vLLM / 本地服务同）
-    base_url: str = ""                          # 留空 = 回退 .env 的 LLM_BASE_URL / EMBED_BASE_URL
-    api_key: str = ""                           # 留空 = 回退 .env 的 LLM_API_KEY / EMBED_API_KEY
+    base_url: str = ""                          # 留空 = 用 OpenAI 官方端点
+    api_key: str = ""                           # 留空 = 不带鉴权（第三方服务通常必填）
     params: dict[str, Any] = {}                 # temperature / dim / max_tokens / timeout …
     set_default: bool = False                   # 是否同时设为该 kind 的默认项
 
@@ -314,6 +356,33 @@ class VaultCreate(BaseModel):
     filters: "IngestFilters | None" = None  # 该 vault 的摄取过滤（§16.3）
 
 
+class VaultUpdate(BaseModel):
+    """改 vault 配置：**只允许** name 与 filters。
+
+    source_type / source_value 刻意不可改 —— 换源等于换一个库，把已有索引指向
+    另一个目录会让「磁盘内容」与「已建索引」无声错配；应新建 vault。
+
+    未出现在请求体里的字段不动（路由用 model_fields_set 判断）；
+    filters 显式传 null = 清空该 vault 的过滤（回到 settings 默认）。
+    """
+    name: str | None = None
+    filters: "IngestFilters | None" = None
+
+
+class VaultBrowseEntry(BaseModel):
+    """目录树的一个子目录节点（GET /vaults/browse）。"""
+    name: str                              # 目录名（展示用）
+    rel: str                               # 相对浏览根的 POSIX 路径，如 notes/private
+    has_children: bool = False             # 是否还有下一层（决定是否显示展开箭头）
+
+
+class VaultBrowseOut(BaseModel):
+    """目录树一层的结果（懒加载：前端每次展开只请求一层）。"""
+    root: str                              # 被浏览的根目录绝对路径（回显，便于前端确认）
+    rel: str = ""                          # 本层相对根的路径；"" = 根目录本身
+    entries: List[VaultBrowseEntry] = []
+
+
 class VaultOut(BaseModel):
     id: int
     user_id: str
@@ -321,7 +390,9 @@ class VaultOut(BaseModel):
     source_type: str
     source_value: str
     origin: str = "ui"                     # 一期恒为 "ui"（前端/API 创建；.env 种子已废弃）
-    indexed_at: str | None = None
+    indexed_at: int | None = None          # UTC 毫秒时间戳（未建过索引为 None）
+    # 该 vault 的摄取过滤；None = 未设置（用 settings 默认）
+    filters: "IngestFilters | None" = None
     # 作业回写状态（见 M06 ADR-9）：只在作业成功后更新，失败/取消保持原值
     embed_profile_id: int | None = None
     embed_indexed_profiles: List[int] = []

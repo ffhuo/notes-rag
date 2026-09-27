@@ -31,12 +31,7 @@ from app.core.database import session_scope
 from app.models import SyncRun, Vault
 from app.models.schemas import IngestFilters
 from app.services import model_service, run_service
-from app.services.ingest_service import ENV_PROFILE_PLACEHOLDER
-from app.services.model_service import (
-    ModelNotConfigured,
-    runtime_from_settings,
-    to_runtime,
-)
+from app.services.model_service import to_runtime
 
 # 解压防护上限（一期固定值，与单文件 max_file_size 独立）
 _MAX_ZIP_ENTRIES = 20_000
@@ -65,7 +60,8 @@ def resolve_local_path(vault: Vault, settings: Settings) -> Path:
     if source_type == "local":
         p = Path(vault.source_value).expanduser()
     elif source_type == "uploaded":
-        p = Path(settings.upload_dir) / str(vault.id)
+        # 与 save_upload 保持一致用绝对路径：避免 CWD 变化时指向别处
+        p = (Path(settings.upload_dir) / str(vault.id)).resolve()
     elif source_type in ("git", "remote"):
         # 一期：不做 clone/pull。缓存目录由其他手段预置；缺失即明确失败。
         p = Path(settings.upload_dir) / f"{source_type}_{vault.id}"
@@ -83,7 +79,11 @@ def resolve_local_path(vault: Vault, settings: Settings) -> Path:
 
 
 async def save_upload(vault_id: "int | str", file: Any, settings: Settings = default_settings) -> Path:
-    """接收上传的 zip → 安全解压到 settings.upload_dir/<vault_id>，返回该目录。
+    """接收上传的 zip → 安全解压到 settings.upload_dir/<vault_id>，返回该目录（**绝对路径**）。
+
+    返回值会被写进 vault.source_value，而 source_value 的语义是「绝对路径」（本地目录与
+    目录树浏览端点都按绝对路径解析）。settings.upload_dir 默认是相对路径 `./data/uploads`，
+    若原样落库，一旦进程 CWD 与建库时不同，浏览解压目录就会指向别处 —— 故此处统一 resolve。
 
     防护：
     - 只处理 zip（按文件名 / 魔数）；非 zip 抛 ValueError
@@ -96,7 +96,7 @@ async def save_upload(vault_id: "int | str", file: Any, settings: Settings = def
     if not zipfile.is_zipfile(io.BytesIO(data)):
         raise ValueError(f"仅支持 .zip 压缩包：{name!r}")
 
-    target = Path(settings.upload_dir) / str(vault_id)
+    target = (Path(settings.upload_dir) / str(vault_id)).resolve()
     if target.exists():
         shutil.rmtree(target)
     target.mkdir(parents=True, exist_ok=True)
@@ -147,27 +147,23 @@ async def submit_sync(
 
     步骤：
     1) 解析 embedding：ref（name 或 id）或当前默认 embed profile → runtime；
-       表为空时回退 .env（profile 占位 "env"）
+       一条 embed 配置都没有时抛 ModelNotConfigured，由路由层转 409
     2) 增量模式下做跨模型守卫 assert_embed_compatible；rebuild 允许换模型
     3) run_service.submit(...) —— 抢锁 / 落库(queued) / create_task / 返回 run
 
     本函数**不解析 local_path**（执行阶段才解析），提交不依赖源可达。
     """
     async with session_scope() as session:
-        try:
-            profile = await model_service.resolve_profile(
-                session, settings, "embed", ref=embed_profile_ref, user_id=vault.user_id
-            )
-            runtime = to_runtime(profile, settings)
-            profile_id: "int | str" = profile.id
+        # 无任何 embed 配置 → ModelNotConfigured，路由层转 409 提示去「模型」页配置
+        profile = await model_service.resolve_profile(
+            session, settings, "embed", ref=embed_profile_ref, user_id=vault.user_id
+        )
+        runtime = to_runtime(profile)
+        profile_id: "int | str" = profile.id
 
-            # 跨模型守卫：只对「增量 sync」生效；换模型必须走 rebuild（M08 §2）
-            if mode != "rebuild":
-                model_service.assert_embed_compatible(vault, profile)
-        except ModelNotConfigured:
-            # 无任何 DB 模型配置：回退 .env，占位 profile，不做兼容守卫
-            runtime = runtime_from_settings(settings, "embed")
-            profile_id = ENV_PROFILE_PLACEHOLDER
+        # 跨模型守卫：只对「增量 sync」生效；换模型必须走 rebuild（M08 §2）
+        if mode != "rebuild":
+            model_service.assert_embed_compatible(vault, profile)
 
     return await run_service.submit(
         vault,

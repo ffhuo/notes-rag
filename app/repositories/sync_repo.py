@@ -1,7 +1,7 @@
 """数据访问·作业记录 — sync_runs 表的读写（作业表 + 可观测载体，M03 §5.11 / §5.13）。
 
 能力：
-- 作业生命周期：create（queued）→ update_progress（节流）→ finish（终态 + 计数）
+- 作业生命周期：create（queued）→ mark_running（拿到执行槽后）→ update_progress（节流）→ finish（终态 + 计数）
 - 查询：按 vault 列历史、按 run_id 取详情、判定「是否已有作业在跑」
 - 取消：置 cancel_requested（协作式；本层只置标志，执行侧在文件边界才生效）
 - 裁剪：每 vault 保留最近 N 条（SYNC_RUNS_KEEP，默认 50），防定时同步撑爆表
@@ -11,6 +11,7 @@
 - create_sync_run(session, vault_id, trigger, mode, dry_run, user_id) -> SyncRun
 - get_sync_run(session, run_id, user_id=None) -> SyncRun | None
 - find_active_run(session, vault_id) -> SyncRun | None
+- mark_running(session, run_id) -> None
 - update_progress(session, run_id, stage, total, processed, current_item, message) -> None
 - finish_sync_run(session, run_id, status, counters, blocked_reason, error, detail_json) -> None
 - request_cancel(session, run_id) -> bool
@@ -82,6 +83,21 @@ async def find_active_run(session: AsyncSession, vault_id: int) -> SyncRun | Non
         ).order_by(SyncRun.id.desc())
     )
     return result.scalar_one_or_none()
+
+
+async def mark_running(session: AsyncSession, run_id: int) -> None:
+    """queued → running：作业**拿到全局执行槽、真正开始执行**时调用。
+
+    排队等槽期间保持 queued —— 那才是「排队」的准确语义（前端 KPI 靠它区分
+    「执行中」与「排队」，不写这一笔的话所有作业会一直显示排队中）。
+    只改仍为 queued 的行，避免覆盖已被取消 / 裁剪的记录。
+    """
+    await session.execute(
+        sa_update(SyncRun)
+        .where(SyncRun.id == run_id, SyncRun.status == "queued")
+        .values(status="running")
+    )
+    await session.commit()
 
 
 async def update_progress(

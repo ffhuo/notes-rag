@@ -88,10 +88,22 @@ export function percent(run) {
   return Math.min(100, Math.round(((run.processed || 0) / run.total) * 100))
 }
 
-/** 计数摘要，如「+2 ~1 -0 ⇥1」——sync 的四类动作一眼可读。 */
+/**
+ * 计数摘要（中文，只列非零项）：如「新增 2 · 修改 1」；四类全零时返回「无变化」。
+ *
+ * 原先写作 `+2 ~1 -0 ⇥1`，符号与动作的对应关系全靠猜 —— 用户反馈看不懂，故改中文。
+ * 只列非零项是为了让表格列一眼读完（`删除 0` 这种只有核对时才关心）。
+ */
 export function countsSummary(run) {
   if (!run) return ''
-  return `+${run.adds || 0} ~${run.updates || 0} -${run.deletes || 0} ⇥${run.moves || 0}`
+  const parts = [
+    ['新增', run.adds || 0],
+    ['修改', run.updates || 0],
+    ['移动', run.moves || 0],
+    ['删除', run.deletes || 0],
+  ].filter(([, n]) => n > 0)
+  if (!parts.length) return '无变化'
+  return parts.map(([label, n]) => `${label} ${n}`).join(' · ')
 }
 
 /**
@@ -106,12 +118,16 @@ export function pollInterval(status, cancelling = false) {
   return 1000
 }
 
-/** 「3 分钟前」这类相对时间；无值时返回空串（不显示假时间）。 */
-export function relativeTime(iso) {
-  if (!iso) return ''
-  const t = new Date(iso).getTime()
-  if (Number.isNaN(t)) return ''
-  const diff = Date.now() - t
+/**
+ * 「3 分钟前」这类相对时间。
+ *
+ * 入参是 UTC 毫秒时间戳（后端所有时间字段的统一格式，如 started_at / indexed_at），
+ * 不是 ISO 字符串；无值时返回空串（不显示假时间）。
+ */
+export function relativeTime(ts) {
+  if (!ts) return ''
+  const diff = Date.now() - ts
+  if (!Number.isFinite(diff)) return ''
   if (diff < 60_000) return '刚刚'
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`

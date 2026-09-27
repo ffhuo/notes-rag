@@ -19,7 +19,7 @@ IMAGE ?= notes-rag
 TAG ?= latest
 
 .PHONY: help install sync dev run test init-db ingest clean shell \
-        frontend-install frontend-dev frontend-build demo \
+        frontend-install frontend-dev frontend-build frontend-check frontend-tokens demo \
         frontend-install frontend-dev frontend-build \
         docker-build docker-run docker-up docker-down
 
@@ -39,6 +39,8 @@ help:  ## 显示本帮助
 	@echo "  make frontend-install  安装前端依赖（cd frontend && npm install）"
 	@echo "  make frontend-dev      前端热重载开发（Vite，代理 /api 到 :8000）"
 	@echo "  make frontend-build    构建前端到 app/static（由后端托管）"
+	@echo "  make frontend-check    前端门禁：构建 + 令牌对比度 + 样式合规（CI 用）"
+	@echo "  make frontend-tokens   导出令牌给小程序（rpx）与 RN（TS）"
 
 install:  ## 安装依赖并创建 .venv
 	$(UV) sync --python 3.12
@@ -77,6 +79,14 @@ frontend-dev:  ## 前端热重载开发（Vite dev，代理 /api 到后端 :8000
 
 frontend-build:  ## 构建前端到 app/static（由后端 FastAPI 托管）
 	cd frontend && npm run build
+
+frontend-check:  ## 前端门禁：构建 + 令牌对比度 + 样式合规（CI 用）
+	cd frontend && npm run build
+	cd frontend && node scripts/check-contrast.mjs
+	cd frontend && node scripts/check-style.mjs
+
+frontend-tokens:  ## 导出令牌给小程序（rpx）与 RN（TS），产物在 frontend/tokens/
+	cd frontend && node scripts/export-tokens.mjs
 
 # ===== Docker 部署（详见 docs/design.md §15）=====
 docker-build:  ## 构建 Docker 镜像

@@ -78,7 +78,7 @@ cd notes-rag
 uv sync --python 3.12
 
 # 2. 配置环境变量
-cp .env.example .env        # 填入 LLM_API_KEY / VAULT_PATH 等
+cp .env.example .env        # 按需调整 API_KEY / 摄取过滤；模型配置在「模型」页配
 
 # 3. 按 docs/design.md §9 的 Phase 0 → Phase 9 逐步手写代码
 ```
@@ -163,7 +163,7 @@ vault 完全由前端 / API 运行时配置，**不在 `.env` 中管理**：在�
 
 ### 多模型（多个 LLM / 多个 Embedding，使用时可选）
 
-模型配置落 `model_profiles` 表（`.env` 的 `LLM_*` / `EMBED_*` 只是首次启动的种子），前端「Models」页可增删改、设默认、试连。
+模型配置（LLM / Embedding / ASR）全部落 `model_profiles` 表，**`.env` 不再提供模型配置**（无兜底项）；前端「Models」页可增删改、设默认、试连。
 
 - **LLM**：无状态耦合，**每次请求都能换**（`ChatRequest.llm_profile`，前端问答页下拉选择）。
 - **Embedding**：与索引强绑定 —— 向量按 `v{vault}_m{profile}` 分集合，检索必须沿用建索引时那个模型；换模型 = 对该 vault 重新索引（`POST /vaults/{id}/reindex?embed_profile=...`）。接口**故意不暴露** `SearchRequest.embed_profile`，避免「能召回但全是噪声」的静默错误。

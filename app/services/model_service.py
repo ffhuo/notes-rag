@@ -2,15 +2,13 @@
 
 能力：
 - 解析「本次请求用哪个模型」：请求参数 → 用户默认 → 系统种子（三级，见 §18.3）
-- 把 ModelProfile 解析成 ModelRuntime（应用端点/密钥回退），rag 层只认 ModelRuntime
+- 把 ModelProfile 解析成 ModelRuntime（端点 / 密钥取配置自身值），rag 层只认 ModelRuntime
 - 构造 OpenAI 兼容客户端（AsyncOpenAI），供 embedder / llm_client 使用
 - **embedding 一致性守卫**：检索必须用「建该 vault 索引时那个」embedding，换模型需先重建索引（§18.2）
-- 表空时用 .env 的 LLM_* / EMBED_* 构造临时运行时配置（runtime_from_settings 兜底）
 
 主要函数：
 - async def resolve_profile(session, settings, kind, ref=None, user_id="default") -> ModelProfile
-- def to_runtime(profile, settings) -> ModelRuntime
-- def runtime_from_settings(settings, kind) -> ModelRuntime
+- def to_runtime(profile) -> ModelRuntime
 - def build_client(runtime) -> AsyncOpenAI
 - def assert_embed_compatible(vault, profile) -> None
 - def collection_name(vault_id, profile_id) -> str
@@ -80,7 +78,7 @@ async def resolve_profile(
     1) 显式指定：ref 为纯数字按 id 找，否则按 name 找；找不到抛 ModelNotFound
     2) 未指定：取该 (user_id, kind) 的 is_default 项
     3) 再没有：取该 kind 第一条 enabled 项
-    4) 表为空：抛出 ModelNotConfigured，由调用方用 runtime_from_settings 兜底
+    4) 表为空：抛 ModelNotConfigured，由调用方转 409 提示到「模型」页配置
     """
     if ref is not None:
         # 显式指定：数字按 id，否则按 name
@@ -105,15 +103,8 @@ async def resolve_profile(
     raise ModelNotConfigured(f"kind={kind} 无任何可用模型配置")
 
 
-def to_runtime(profile: ModelProfile, settings: Settings) -> ModelRuntime:
-    """profile → 运行时配置：base_url / api_key 留空时回退 .env 的同 kind 配置。"""
-    if profile.kind == "embed":
-        fallback_url = settings.embed_base_url or settings.llm_base_url
-        fallback_key = settings.embed_api_key.get_secret_value() or settings.llm_api_key.get_secret_value()
-    else:
-        fallback_url = settings.llm_base_url
-        fallback_key = settings.llm_api_key.get_secret_value()
-
+def to_runtime(profile: ModelProfile) -> ModelRuntime:
+    """profile → 运行时配置：端点 / 密钥直接取配置自身值（不再回退 .env）。"""
     params = {}
     if profile.params_json and profile.params_json != "{}":
         try:
@@ -124,32 +115,10 @@ def to_runtime(profile: ModelProfile, settings: Settings) -> ModelRuntime:
     return ModelRuntime(
         kind=profile.kind,
         name=profile.name,
-        base_url=profile.base_url or fallback_url,
-        api_key=SecretStr(profile.api_key or fallback_key),
+        base_url=profile.base_url or "",
+        api_key=SecretStr(profile.api_key or ""),
         model=profile.model,
         params=params,
-    )
-
-
-def runtime_from_settings(settings: Settings, kind: str) -> ModelRuntime:
-    """表为空时的兜底：直接用 .env 的 LLM_* / EMBED_* 构造运行时配置。"""
-    if kind == "embed":
-        return ModelRuntime(
-            kind="embed",
-            name="env-embed",
-            base_url=settings.embed_base_url or settings.llm_base_url,
-            api_key=SecretStr(
-                settings.embed_api_key.get_secret_value()
-                or settings.llm_api_key.get_secret_value()
-            ),
-            model=settings.embed_model,
-        )
-    return ModelRuntime(
-        kind="llm",
-        name="env-llm",
-        base_url=settings.llm_base_url,
-        api_key=settings.llm_api_key,
-        model=settings.llm_model,
     )
 
 
@@ -211,7 +180,8 @@ async def list_models(session, user_id: str, kind: str | None = None) -> list[Mo
 async def create_model(
     session, settings: Settings, user_id: str, data: ModelProfileCreate
 ) -> ModelProfileOut:
-    """创建模型配置。base_url / api_key 为空是允许的（表示回退 .env）。"""
+    """创建模型配置。base_url / api_key 为空是允许的：base_url 空 = OpenAI 官方端点，
+    api_key 空 = 不带鉴权（第三方服务通常必填）。"""
     params_json = json.dumps(data.params) if data.params else "{}"
     profile = await model_repo.create_profile(
         session,
@@ -270,16 +240,19 @@ async def set_default(session, user_id: str, kind: str, profile: ModelProfile) -
 
 
 async def test_connection(runtime: ModelRuntime) -> ModelTestResult:
-    """连通性测试：embed 试 1 条，llm 试极短对话。
+    """连通性测试：embed 试 1 条，llm 试极短对话，asr 只探端点。
 
-    实际 API 调用统一走 rag 层（embedder.embed_one / llm_client.chat），
-    本函数只负责计时和结果封装。
+    asr 刻意不做真实转写：那需要造一段音频，且按秒计费 ——
+    用 GET /models 验证「端点可达 + 鉴权有效」就够了，识别质量由实际使用检验。
     """
     start = time.monotonic()
 
     try:
         if runtime.kind == "embed":
             await embed_one("test", runtime)
+        elif runtime.kind == "asr":
+            client = build_client(runtime)
+            await client.models.list()
         else:
             await chat(
                 [{"role": "user", "content": "hi"}],

@@ -6,7 +6,7 @@
 
 1. Fork 本仓库并 `git clone` 到本地。
 2. 用 [uv](https://github.com/astral-sh/uv) 安装依赖：`uv sync --python 3.12`。
-3. 复制配置：`cp .env.example .env` 并填入 `LLM_API_KEY` / `VAULT_PATH` 等。
+3. 复制配置：`cp .env.example .env`（按需调整 `API_KEY` / 摄取过滤等）。**模型配置不在 `.env`**：启动后到前端「模型」页添加 LLM / Embedding 配置（详见 `docs/design.md` §18）。
 4. 按 `docs/design.md` 的 Phase 0 → Phase 4 实现或扩展功能。
 5. 本地验证：`make test` 跑单测；`make dev` 起服务后用 `make ingest` 验证。
 6. 提交前确保：`make test` 通过，新增逻辑有对应测试或文档说明。

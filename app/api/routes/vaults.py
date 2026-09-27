@@ -11,7 +11,9 @@
 - GET    /api/v1/vaults                        # 列表
 - POST   /api/v1/vaults                        # JSON: { name, source_type: local|git|remote, source_value, filters? }
 - POST   /api/v1/vaults/upload                 # multipart: name + file=.zip（source_type=uploaded）
+- GET    /api/v1/vaults/browse                 # ?path=<绝对路径>&rel=<相对子路径> 列一层子目录（目录树懒加载）
 - GET    /api/v1/vaults/{id}
+- PATCH  /api/v1/vaults/{id}                   # 改 name / filters（source_value 不可改）
 - DELETE /api/v1/vaults/{id}
 - POST   /api/v1/vaults/{id}/sync              # 202 RunSubmitResponse（body: SyncRequest）
 - POST   /api/v1/vaults/{id}/reindex           # 202 = sync(mode="rebuild") 的别名；?embed_profile=
@@ -36,7 +38,10 @@
 关联方案：M06 §5.3（提交语义）/ §5.4（repo 原语）/ §5.5（API 契约）+ ADR-8 / ADR-9；
          M03 §5.7（统一作业语义）/ §5.13（作业化执行与进度）；M07 §5.4（前端进度视图）。
 """
+import asyncio
 import json
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
@@ -49,14 +54,18 @@ from app.core.database import get_session
 from app.models import SyncRun, Vault
 from app.models.schemas import (
     DoctorReport,
+    IngestFilters,
     RunSubmitResponse,
     SyncPlan,
     SyncRequest,
     SyncResult,
     SyncRunDetail,
     SyncRunOut,
+    VaultBrowseEntry,
+    VaultBrowseOut,
     VaultCreate,
     VaultOut,
+    VaultUpdate,
 )
 from app.rag.vectorstore import VectorStore
 from app.repositories import sync_repo, vault_repo
@@ -64,6 +73,7 @@ from app.services import run_service, sync_service, vault_service
 from app.services.ingest_service import ENV_PROFILE_PLACEHOLDER
 from app.services.model_service import (
     EmbedModelMismatch,
+    ModelNotConfigured,
     ModelNotFound,
     collection_name,
 )
@@ -92,8 +102,42 @@ def _indexed_profiles(vault: Vault) -> list[int]:
     return [x for x in raw if isinstance(x, int)]
 
 
+def _vault_filters(vault: Vault) -> IngestFilters | None:
+    """vault.filters_json → IngestFilters；空 / 非法 → None（= 未设置过滤）。
+
+    None 而不是「全 None 的 IngestFilters」：前端据此区分「没配过」与「配了但留空」，
+    后者会显式覆盖 settings 默认。
+    """
+    try:
+        raw = json.loads(vault.filters_json or "{}")
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(raw, dict) or not raw:
+        return None
+    try:
+        return IngestFilters.model_validate(raw)
+    except ValueError:                      # pydantic ValidationError 继承自 ValueError
+        logger.warning("vault.filters_json 非法，按未设置处理", vault_id=vault.id)
+        return None
+
+
+def _epoch_ms(dt: datetime | None) -> int | None:
+    """datetime → UTC 毫秒时间戳（出参里所有时间字段的统一格式）。
+
+    库里的时间是**朴素 UTC**：created_at / indexed_at 走 func.now()（SQLite 的
+    CURRENT_TIMESTAMP 本身就是 UTC），SyncRun.finished_at 虽由 datetime.now(timezone.utc)
+    写入，但 SQLite 不保存偏移，读回来同样是无 tz 的朴素值。所以必须显式补 UTC 再取
+    epoch —— 直接 dt.timestamp() 会按**本地时区**解释，东八区下整体偏 8 小时。
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000)
+
+
 def _vault_out(vault: Vault) -> VaultOut:
-    """Vault → VaultOut（datetime → ISO 字符串，JSON 列 → 列表）。"""
+    """Vault → VaultOut（datetime → 毫秒时间戳，JSON 列 → 列表）。"""
     return VaultOut(
         id=vault.id,
         user_id=vault.user_id,
@@ -101,7 +145,8 @@ def _vault_out(vault: Vault) -> VaultOut:
         source_type=vault.source_type,
         source_value=vault.source_value,
         origin=vault.origin,
-        indexed_at=vault.indexed_at.isoformat() if vault.indexed_at else None,
+        indexed_at=_epoch_ms(vault.indexed_at),
+        filters=_vault_filters(vault),
         embed_profile_id=vault.embed_profile_id,
         embed_indexed_profiles=_indexed_profiles(vault),
     )
@@ -134,8 +179,8 @@ def _run_out(run: SyncRun) -> SyncRunOut:
         failed_cnt=run.failed_cnt or 0,
         blocked_reason=run.blocked_reason,
         error=run.error,
-        started_at=run.started_at.isoformat() if run.started_at else None,
-        finished_at=run.finished_at.isoformat() if run.finished_at else None,
+        started_at=_epoch_ms(run.started_at),
+        finished_at=_epoch_ms(run.finished_at),
         elapsed_ms=run.elapsed_ms or 0,
     )
 
@@ -319,6 +364,84 @@ async def upload_vault(
     return _vault_out(vault)
 
 
+@router.get("/browse", response_model=VaultBrowseOut)
+async def browse_dirs(
+    path: str = Query(..., description="要浏览的根目录绝对路径（通常是 vault 的本地目录）"),
+    rel: str = Query("", description="相对根目录的子路径；留空 = 根目录本身"),
+    _user_id: str = Depends(get_current_user_id),   # 仅用于强制鉴权，不参与业务
+):
+    """列出某一层子目录（目录树懒加载），供前端勾选「排除目录」。
+
+    只返回目录、不返回文件：过滤语义是「排除整个文件夹下的内容」，前端把勾选结果
+    转成 `<rel>/**` 相对路径 glob 写进 vault.filters.exclude（同步时按目录剪枝）。
+
+    注意：本端点按绝对路径浏览服务器文件系统，多用户部署下任意登录用户都可探测
+    目录名（只列目录、不读内容）。如需收紧，应在网关/鉴权层限制而非在此处硬编码。
+    """
+    root = Path(path).expanduser().resolve()
+    if not root.is_dir():
+        raise HTTPException(status_code=422, detail=f"目录不存在或不是目录：{path}")
+
+    sub = _normalize_rel(rel)
+    target = root if not sub else (root / sub).resolve()
+    if target != root and root not in target.parents:
+        raise HTTPException(status_code=422, detail=f"非法子路径：{rel}")
+    if not target.is_dir():
+        raise HTTPException(status_code=422, detail=f"子目录不存在：{rel}")
+
+    # scandir 是阻塞 IO，放线程池避免卡住事件循环（同 _scan 的处理）
+    entries = await asyncio.to_thread(_list_subdirs, target, root)
+    return VaultBrowseOut(root=str(root), rel=sub, entries=entries)
+
+
+def _normalize_rel(raw: str) -> str:
+    """归一化前端传来的相对路径；绝对路径 / 含 .. → 422（路径穿越防护）。"""
+    text = (raw or "").strip().replace("\\", "/").strip("/")
+    if not text:
+        return ""
+    parts: list[str] = []
+    for seg in text.split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            raise HTTPException(status_code=422, detail=f"非法子路径：{raw}")
+        parts.append(seg)
+    return "/".join(parts)
+
+
+def _list_subdirs(target: Path, root: Path) -> list[VaultBrowseEntry]:
+    """列出 target 下的一层子目录（跳过隐藏目录：扫描时本就剪枝，列出只会误导）。"""
+    entries: list[VaultBrowseEntry] = []
+    try:
+        with os.scandir(target) as it:
+            for item in it:
+                if not item.is_dir(follow_symlinks=False) or item.name.startswith("."):
+                    continue
+                entries.append(
+                    VaultBrowseEntry(
+                        name=item.name,
+                        rel=Path(item.path).resolve().relative_to(root).as_posix(),
+                        has_children=_has_subdir(item.path),
+                    )
+                )
+    except OSError as e:
+        raise HTTPException(status_code=422, detail=f"无法读取目录：{target}（{e}）")
+    entries.sort(key=lambda x: x.name)
+    return entries
+
+
+def _has_subdir(dir_path: str) -> bool:
+    """是否存在下一层可展示的子目录（存在即提前返回，不扫全量）。"""
+    try:
+        with os.scandir(dir_path) as it:
+            for item in it:
+                if item.is_dir(follow_symlinks=False) and not item.name.startswith("."):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 @router.get("/{vault_id}", response_model=VaultOut)
 async def get_vault(
     vault_id: int,
@@ -327,6 +450,48 @@ async def get_vault(
 ):
     """vault 详情（含 *last_sync_* / embed_indexed_profiles 等状态；状态只在作业成功后回写）。"""
     vault = await _get_vault_or_404(session, vault_id, user_id)
+    return _vault_out(vault)
+
+
+@router.patch("/{vault_id}", response_model=VaultOut)
+async def update_vault(
+    vault_id: int,
+    payload: VaultUpdate,
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """改 vault 的 name / filters（只允许这两个字段，见 schemas.VaultUpdate）。
+
+    **不自动重建索引**：过滤改动在下次 /sync 时生效。改过滤会让「新排除的文件」变成
+    待删除（known 里有、seen 里没有），届时仍受删除比例护栏保护。
+    传 filters=null 表示清空过滤，回到 settings 默认。
+    """
+    await _get_vault_or_404(session, vault_id, user_id)
+
+    provided = payload.model_fields_set
+    name: str | None = None
+    if "name" in provided:
+        name = (payload.name or "").strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="name 不能为空")
+
+    filters_json: str | None = None
+    if "filters" in provided:
+        filters_json = (
+            json.dumps(payload.filters.model_dump(exclude_none=True), ensure_ascii=False)
+            if payload.filters is not None
+            else "{}"
+        )
+
+    if name is None and filters_json is None:
+        raise HTTPException(status_code=422, detail="未提供任何可更新字段（name / filters）")
+
+    vault = await vault_repo.update_vault(
+        session, vault_id, user_id, name=name, filters_json=filters_json
+    )
+    if vault is None:                       # 归属校验后仍可能被并发删除
+        raise HTTPException(status_code=404, detail=f"vault_id={vault_id} 不存在或不属于当前用户")
+    logger.info("vault 已更新", vault_id=vault_id, renamed=name is not None, filters_set=filters_json is not None)
     return _vault_out(vault)
 
 
@@ -355,7 +520,7 @@ async def delete_vault(
             },
         )
 
-    # 清向量：已知建过索引的 profile；从未用 DB profile 建过（.env 兜底）则清 env 集合
+    # 清向量：已知建过索引的 profile；从未用 DB profile 建过（历史 env 占位存量数据）则清 env 集合
     targets = _indexed_profiles(vault)
     if not targets and vault.indexed_at is not None:
         targets = [ENV_PROFILE_PLACEHOLDER]
@@ -415,6 +580,11 @@ async def _submit(
         )
     except ModelNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ModelNotConfigured:
+        raise HTTPException(
+            status_code=409,
+            detail="尚未配置向量模型：请到「模型」页新增一个 kind=embed 的配置",
+        )
     except EmbedModelMismatch as e:
         raise HTTPException(status_code=409, detail=str(e))
 

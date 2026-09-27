@@ -1,11 +1,13 @@
 """API·auth — 多用户鉴权（ENABLE_MULTIUSER=true 时启用，见 §17.3）。
 
 能力：
+- 探测鉴权模式（mode，免鉴权，供前端决定进入方式）
 - 注册账号（register）
 - 登录签发 JWT（login）
 - 取当前用户（me，调试 / 前端取身份）
 
 主要端点：
+- GET  /api/v1/auth/mode      -> { multiuser, api_key_required }
 - POST /api/v1/auth/register  { username, password } -> UserOut
 - POST /api/v1/auth/login     { username, password } -> Token
 - GET  /api/v1/auth/me        -> UserOut
@@ -44,6 +46,23 @@ def _require_jwt_secret() -> str:
             detail="服务端未配置 JWT_SECRET",
         )
     return settings.jwt_secret
+
+
+@router.get("/mode")
+async def auth_mode() -> dict:
+    """探测鉴权模式（**免鉴权**）。
+
+    前端启动时先调这里，据此决定进入方式：
+      · multiuser=False 且 api_key_required=False → 本机免鉴权，直接进主界面
+      · multiuser=False 且 api_key_required=True  → 让用户填一次 API Key
+      · multiuser=True                            → 强制弹登录 / 注册
+
+    只返回两个布尔位，不含任何凭据。
+    """
+    return {
+        "multiuser": settings.enable_multiuser,
+        "api_key_required": bool(settings.api_key) and not settings.enable_multiuser,
+    }
 
 
 @router.post("/register", response_model=UserOut)

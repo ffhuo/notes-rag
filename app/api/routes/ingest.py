@@ -14,7 +14,8 @@
 某个源被跳过（如该 vault 已有作业在跑）不使整体失败 —— 记入 `skipped` 并附现有 run_id，
 调用方据此直接跟进那个任务，而不是重试（同 vault 不排队，M06 ADR-8）。
 
-embedding 选择：req.embed_profile（name 或 id）→ 用户默认 → .env 兜底（M08 §4）；
+embedding 选择：req.embed_profile（name 或 id）→ 用户默认（M08 §4）；一条 embed 配置都没有
+则 409 提示去「模型」页添加（**不再有 .env 兜底**）；
 索引写入 collection_name(vault_id, profile_id)，成功后回写 vault.embed_profile_id /
 embed_indexed_profiles（**失败 / 取消时保持原值**，M06 ADR-9）。
 
@@ -26,7 +27,7 @@ embed_indexed_profiles（**失败 / 取消时保持原值**，M06 ADR-9）。
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_api_key, get_current_user_id, get_session, get_settings
+from app.api.deps import get_current_user_id, get_session, get_settings
 from app.core.config import Settings
 from app.models import Vault
 from app.models.schemas import IngestRequest, IngestSubmitResponse
@@ -99,7 +100,6 @@ async def _upsert_vault(
 @router.post("/ingest", response_model=IngestSubmitResponse, status_code=status.HTTP_202_ACCEPTED)
 async def ingest(
     req: IngestRequest,
-    _: str = Depends(get_current_api_key),
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),

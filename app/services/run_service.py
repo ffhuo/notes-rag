@@ -71,11 +71,7 @@ from app.models import Vault
 from app.models.schemas import IngestFilters, ModelRuntime
 from app.repositories import sync_repo, vault_repo
 from app.services import model_service
-from app.services.model_service import (
-    ModelNotConfigured,
-    runtime_from_settings,
-    to_runtime,
-)
+from app.services.model_service import to_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -332,6 +328,11 @@ async def execute(
         await _finish(run_id, "failed", {}, error="vault 不存在")
         return
 
+    # 正式执行：queued → running。排队等全局执行槽期间保持 queued，
+    # 前端 KPI 才能把「执行中」与「排队」分开（此前从不写 running，两者混为一谈）。
+    async with session_scope() as session:
+        await sync_repo.mark_running(session, run_id)
+
     # dry_run / 计划标志位取自 DB 行（它们在落库时已确定）
     try:
         local_path = vault_service.resolve_local_path(vault, settings)
@@ -340,28 +341,24 @@ async def execute(
         await _finish(run_id, "failed", {}, blocked_reason="source_unavailable", error=str(e))
         return
 
-    # 解析 embedding 运行时：submit 已带则复用；否则按 vault 当前 profile 解析，
-    # 表为空时回退 .env 兜底
+    # 解析 embedding 运行时：submit 已带则复用；否则按 vault 当前 profile 解析
+    # （正常路径 submit 已把关，无 embed 配置时进不到这里；这里只兜住历史 / 手工调用）
     runtime, resolved_profile_id = embed_runtime, embed_profile_id
     if runtime is None:
         async with session_scope() as session:
             ref = str(resolved_profile_id or vault.embed_profile_id) if (
                 resolved_profile_id or vault.embed_profile_id
             ) else None
-            try:
-                profile = await model_service.resolve_profile(
-                    session, settings, "embed", ref=ref, user_id=vault.user_id
-                )
-                runtime = to_runtime(profile, settings)
-                resolved_profile_id = profile.id
-            except ModelNotConfigured:
-                runtime = runtime_from_settings(settings, "embed")
-                from app.services.ingest_service import ENV_PROFILE_PLACEHOLDER
-                resolved_profile_id = ENV_PROFILE_PLACEHOLDER
+            profile = await model_service.resolve_profile(
+                session, settings, "embed", ref=ref, user_id=vault.user_id
+            )
+            runtime = to_runtime(profile)
+            resolved_profile_id = profile.id
 
     effective_filters = filters or _vault_filters(vault)
 
-    await reporter.advance("running", None)
+    # 阶段由 sync_service 驱动（probe → scan → diff → index）；本层不写自己的阶段名，
+    # 否则前端会拿到没有中文标签的伪阶段
     try:
         result = await sync_service.sync_vault(
             vault,

@@ -1,13 +1,13 @@
 """API·models — 多模型配置管理（多个 LLM / 多个 Embedding，使用时可选，见 §18）。
 
 能力：
-- 列出当前用户的模型配置（可按 kind=llm|embed 过滤）
+- 列出当前用户的模型配置（可按 kind=llm|embed|asr 过滤）
 - 新增 / 修改 / 删除模型配置；删除被引用的 embedding 配置需先换模型重建索引
 - 设置某 kind 的默认项（一个 kind 只有一个默认）
 - 连通性测试：不落库直接试连（支持对未保存的配置试连）
 
 主要端点：
-- GET    /api/v1/models?kind=llm|embed
+- GET    /api/v1/models?kind=llm|embed|asr
 - POST   /api/v1/models                  # { kind, name, model, provider?, base_url?, api_key?, params?, set_default? }
 - POST   /api/v1/models/test             # 试连未保存的配置（body 同 create，不含 set_default）
 - GET    /api/v1/models/{id}
@@ -18,7 +18,7 @@
 
 安全约定：
 - 出参**永不返回 api_key**，仅给 api_key_masked（如 sk-ab****yz），见 §18.6
-- base_url / api_key 允许留空，表示回退 .env 的 LLM_* / EMBED_*（§18.3 回退规则）
+- base_url / api_key 允许留空：base_url 空 = OpenAI 官方端点，api_key 空 = 不带鉴权
 
 分层约定：本文件只做「入参校验 + 调 service + 把领域异常翻译成 HTTP 状态码」，
 DB 读写一律经 model_repo / model_service，不在路由里写 SQL。
@@ -47,11 +47,14 @@ from app.services.model_service import to_out, to_runtime
 
 router = APIRouter(prefix="/api/v1/models", tags=["models"])
 
-_KINDS = ("llm", "embed")
+# kind 白名单：llm（对话）/ embed（向量化）/ asr（语音识别）。
+# 三者在同一个 model_profiles 表里靠 kind 区分，各自有独立的默认项；
+# 加 asr 不需要迁移（DB 列是普通字符串），但要同步 test_connection 的分支。
+_KINDS = ("llm", "embed", "asr")
 
 
 def _require_kind(kind: str) -> str:
-    """kind 只允许 llm / embed。"""
+    """kind 只允许 llm / embed / asr。"""
     if kind not in _KINDS:
         raise HTTPException(
             status_code=422, detail=f"kind 必须是 {' | '.join(_KINDS)} 之一，收到 {kind!r}"
@@ -67,13 +70,11 @@ async def _get_or_404(session: AsyncSession, model_id: int, user_id: str) -> Mod
     return profile
 
 
-def _runtime_from_payload(
-    payload: ModelProfileCreate, user_id: str, settings: Settings
-) -> ModelRuntime:
-    """把**未落库**的配置转成 ModelRuntime（含 .env 回退），用于试连。
+def _runtime_from_payload(payload: ModelProfileCreate, user_id: str) -> ModelRuntime:
+    """把**未落库**的配置转成 ModelRuntime，用于试连。
 
-    构造一个临时 ORM 实例（不加入 session、不 commit），只为复用 to_runtime 里
-    「base_url / api_key 留空即回退 .env」这一份唯一规则，避免在路由里重写一遍。
+    构造一个临时 ORM 实例（不加入 session、不 commit），只为复用 to_runtime
+    这一份唯一规则，避免在路由里重写一遍。
     """
     transient = ModelProfile(
         user_id=user_id,
@@ -85,16 +86,16 @@ def _runtime_from_payload(
         api_key=payload.api_key,
         params_json=json.dumps(payload.params or {}),
     )
-    return to_runtime(transient, settings)
+    return to_runtime(transient)
 
 
 @router.get("", response_model=list[ModelProfileOut])
 async def list_models(
-    kind: str | None = Query(default=None, pattern="^(llm|embed)$"),
+    kind: str | None = Query(default=None, pattern="^(llm|embed|asr)$"),
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
 ):
-    """列出当前用户的模型配置（可按 kind=llm|embed 过滤）。"""
+    """列出当前用户的模型配置（可按 kind=llm|embed|asr 过滤）。"""
     return await model_service.list_models(session, user_id, kind)
 
 
@@ -121,11 +122,10 @@ async def create_model(
 async def test_unsaved_model(
     payload: ModelProfileCreate,
     user_id: str = Depends(get_current_user_id),
-    settings: Settings = Depends(get_settings),
 ):
-    """试连**未保存**的配置：不落库，直接按入参（含 .env 回退）发起一次真实调用。"""
+    """试连**未保存**的配置：不落库，直接按入参发起一次真实调用。"""
     _require_kind(payload.kind)
-    runtime = _runtime_from_payload(payload, user_id, settings)
+    runtime = _runtime_from_payload(payload, user_id)
     return await model_service.test_connection(runtime)
 
 
@@ -210,11 +210,10 @@ async def test_model(
     model_id: int,
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ):
     """试连已保存的配置：embed 试嵌一条短文本，llm 试一次极短对话。"""
     profile = await _get_or_404(session, model_id, user_id)
-    runtime = to_runtime(profile, settings)
+    runtime = to_runtime(profile)
     return await model_service.test_connection(runtime)
 
 

@@ -2,13 +2,11 @@
 
 能力：
 - 用 pydantic-settings 读取环境变量 / .env 文件，类型安全
-- 集中管理 LLM、向量库、数据库、服务端口等配置项
+- 集中管理向量库、数据库、摄取过滤、服务端口等配置项
 - 可导出模块级单例，供依赖注入使用
 
 主要类：
 - class Settings(BaseSettings): 配置模型
-    - 字段：llm_base_url / llm_api_key / llm_model（LLM 对话 / 问答）
-    - 字段：embed_base_url / embed_api_key / embed_model（Embedding 向量化，可回退 LLM 端点/密钥）
     - 字段：ingest_exts / ingest_exclude_dirs（摄取过滤：扩展名白名单 / 排除目录，详见 §16）
     - 字段：ingest_sync_interval / ingest_sync_on_startup / ingest_settle_seconds /
       ingest_max_concurrency / prune_enabled / prune_ratio_limit / sync_runs_keep /
@@ -31,7 +29,7 @@ from typing import Annotated, Any, List
 
 import json
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, field_validator
 
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
@@ -43,18 +41,6 @@ class Settings(BaseSettings):
     # ===== 环境变量配置 =====
     DEBUG: bool = False
     version: str = "0.1.0"
-
-    # ===== LLM（对话 / 问答，OpenAI 兼容端点）=====
-    llm_base_url: str = "https://api.openai.com/v1"
-    llm_api_key: SecretStr
-    llm_model: str = "gpt-4o-mini"
-
-    # ===== Embedding（文本向量化，OpenAI 兼容端点）=====
-    # 默认留空，回退到 LLM 同款端点 / 密钥（多数兼容服务两者共用，如 Qwen、本地 vLLM）；
-    # 若使用独立 embedding 服务（如本地 BGE-M3、不同供应商），在此显式覆盖即可。
-    embed_base_url: str = ""                # 空 = 回退 llm_base_url
-    embed_api_key: SecretStr = SecretStr("")  # 空 = 回退 llm_api_key
-    embed_model: str = "text-embedding-3-small"
 
     # ===== 摄取过滤（多格式 / 文件夹过滤，见 docs/design.md §16）=====
     # 一期仅 md / txt；PDF / Word / Excel 等随 parser 实现启用（pyproject 可选依赖 docs 组）
@@ -141,14 +127,6 @@ class Settings(BaseSettings):
         return [
             origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
         ]
-
-    def get_embed_base_url(self) -> str:
-        """Embedding 端点：显式配置优先，否则回退 LLM 端点。"""
-        return self.embed_base_url or self.llm_base_url
-
-    def get_embed_api_key(self) -> SecretStr:
-        """Embedding 密钥：显式配置优先，否则回退 LLM 密钥。"""
-        return self.embed_api_key if self.embed_api_key.get_secret_value() else self.llm_api_key
 
 
 settings = Settings()  # 如需模块级单例在此实例化（注意 import 顺序）

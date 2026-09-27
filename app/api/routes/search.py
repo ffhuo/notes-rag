@@ -2,7 +2,7 @@
 
 能力：
 - 接收 query / top_k / threshold / vault_id，返回语义检索命中
-- 受 API Key 保护（依赖 get_current_api_key）
+- 受鉴权保护（get_current_user：X-API-Key 或 Bearer JWT，见 §17.3）
 - **embedding 不由请求指定**：必须沿用该 vault 建索引时的模型，故接口不暴露 embed_profile（§18.2）；
   由 model_service 按 vault.embed_profile_id 解析并做 assert_embed_compatible 守卫
 
@@ -15,7 +15,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
-    get_current_api_key,
     get_current_user_id,
     get_session,
     get_settings,
@@ -32,7 +31,6 @@ router = APIRouter(prefix="/api/v1", tags=["search"])
 @router.post("/search", response_model=SearchResponse)
 async def search(
     req: SearchRequest,
-    _: str = Depends(get_current_api_key),
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -41,6 +39,10 @@ async def search(
 
     检索必须绑定 vault：向量集合按 (vault_id, embedding 模型) 隔离，
     脱离 vault 无法确定查哪个集合、用哪个 embedding。
+
+    鉴权只用 get_current_user（同时接受 X-API-Key 与 Bearer JWT）。
+    **不要再叠加 get_current_api_key**：它只认 X-API-Key，多用户登录态下必然 401，
+    而前端把 401 当作「凭据失效」全局处理（清凭据 + 退回登录页）。
     """
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=422, detail="query 不能为空")

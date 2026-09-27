@@ -8,6 +8,7 @@
 - async def create_vault(session, user_id, name, source_type, source_value, filters_json, origin="ui") -> Vault
 - async def get_vault(session, vault_id, user_id) -> Vault | None
 - async def list_vaults(session, user_id) -> list[Vault]
+- async def update_vault(session, vault_id, user_id, name=None, filters_json=None) -> Vault | None
 - async def count_vaults(session) -> int
 - async def find_by_source(session, user_id, source_value) -> Vault | None
 - async def delete_vault(session, vault_id, user_id) -> None
@@ -57,6 +58,30 @@ async def count_vaults(session: AsyncSession) -> int:
     return result.scalar_one()
 
 
+async def update_vault(
+    session: AsyncSession,
+    vault_id: int,
+    user_id: str,
+    name: Optional[str] = None,
+    filters_json: Optional[str] = None,
+) -> Optional[Vault]:
+    """改 vault 的 name / filters_json（None = 该字段不动）。
+
+    source_type / source_value 不在此列：换源应新建 vault（见 schemas.VaultUpdate）。
+    vault 不存在或不属于该用户 → 返回 None（调用方翻译成 404）。
+    """
+    vault = await get_vault(session, vault_id, user_id)
+    if vault is None:
+        return None
+    if name is not None:
+        vault.name = name
+    if filters_json is not None:
+        vault.filters_json = filters_json
+    await session.commit()
+    await session.refresh(vault)
+    return vault
+
+
 async def find_by_source(
     session: AsyncSession, user_id: str, source_value: str
 ) -> Optional[Vault]:
@@ -103,7 +128,7 @@ async def touch_embed_state(
     """作业成功收尾时回写 vault 的 embedding 状态与 indexed_at（M06 ADR-9）。
 
     - profile_id 为 int：记入 embed_indexed_profiles 并置为当前 embed_profile_id
-    - profile_id 为 None（.env 兜底的 env 占位）：只刷新 indexed_at，不改模型列
+    - profile_id 为 None（历史 env 占位，已废弃，仅为兼容存量数据）：只刷新 indexed_at，不改模型列
     - vault 不存在 / 归属不符：返回 False（调用方据此仅记日志）
     """
     vault = await get_vault(session, vault_id, user_id)

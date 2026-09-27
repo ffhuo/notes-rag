@@ -1,0 +1,313 @@
+/* ==========================================================================
+   notes-rag 设计令牌（Design Tokens）
+   规范来源：docs/ui-spec.md §2
+
+   分层：L1 Primitive → L2 Brand → L3 Semantic → L4 Component
+     · L1 原始色阶见规范 §2.2（本文件在 L2 直接落地具体值，避免多一层变量间接）
+     · L2 品牌主题包：主题切换只改这一层，共 5 品牌 × 2 明暗
+     · L3 语义层：跨端映射层，组件只引用本层
+     · L4 组件级：就近覆盖用的通用令牌
+
+   跨端约束（见规范 §6.1）：
+     · 不依赖 color-mix() / lighten() 等运行时颜色函数（小程序 / RN 不支持）
+       故所有派生色（hover / soft / on）均显式给出
+     · 主题与明暗一律用 class 切换，不用 [data-*] 属性选择器
+       （小程序 WXSS 对属性选择器支持不可靠）
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   L2 Brand —— 默认主题：blue × light
+   -------------------------------------------------------------------------- */
+:root {
+  --brand-primary: #1E40AF;
+  --brand-primary-hover: #1E3A8A;
+  --brand-primary-soft: #DBEAFE;
+  --brand-primary-on-soft: #1E3A8A;
+  --brand-accent: #F59E0B;
+  --brand-accent-hover: #D97706;
+  --brand-accent-soft: #FEF3C7;
+  --brand-accent-on: #451A03;
+}
+
+/* L2 Brand —— 品牌覆盖（浅色）
+   仅替换品牌族 8 值，中性色与语义状态色在任何主题下都不变。
+   对比度门禁：primary 对 bg-page ≥4.5:1；accent 对 accent-on ≥4.5:1。 */
+
+/* indigo：靛蓝 + 玫红
+   注：accent 未采用草案的 #F43F5E（配白字仅 3.7:1，不达 WCAG AA），
+   改用 #BE123C 配白字 6.3:1。 */
+.brand-indigo {
+  --brand-primary: #4338CA;
+  --brand-primary-hover: #3730A3;
+  --brand-primary-soft: #E0E7FF;
+  --brand-primary-on-soft: #3730A3;
+  --brand-accent: #BE123C;
+  --brand-accent-hover: #9F1239;
+  --brand-accent-soft: #FFE4E6;
+  --brand-accent-on: #FFFFFF;
+}
+
+/* teal：青绿 + 亮绿 */
+.brand-teal {
+  --brand-primary: #0F766E;
+  --brand-primary-hover: #115E59;
+  --brand-primary-soft: #CCFBF1;
+  --brand-primary-on-soft: #115E59;
+  --brand-accent: #84CC16;
+  --brand-accent-hover: #65A30D;
+  --brand-accent-soft: #ECFCCB;
+  --brand-accent-on: #1A2E05;
+}
+
+/* slate：低饱和中性
+   注：accent 未采用草案的 #0EA5E9（配白字仅 2.8:1），改用 #0369A1 配白字 5.9:1。 */
+.brand-slate {
+  --brand-primary: #334155;
+  --brand-primary-hover: #1E293B;
+  --brand-primary-soft: #E2E8F0;
+  --brand-primary-on-soft: #1E293B;
+  --brand-accent: #0369A1;
+  --brand-accent-hover: #075985;
+  --brand-accent-soft: #E0F2FE;
+  --brand-accent-on: #FFFFFF;
+}
+
+/* violet：紫 + 琥珀 */
+.brand-violet {
+  --brand-primary: #6D28D9;
+  --brand-primary-hover: #5B21B6;
+  --brand-primary-soft: #EDE9FE;
+  --brand-primary-on-soft: #5B21B6;
+  --brand-accent: #F59E0B;
+  --brand-accent-hover: #D97706;
+  --brand-accent-soft: #FEF3C7;
+  --brand-accent-on: #451A03;
+}
+
+/* --------------------------------------------------------------------------
+   L2 Brand —— 深色覆盖
+   深色下品牌色必须提亮（深底对比度不足）。
+   .scheme-dark 提供 blue 的深色值 + 中性/状态色深色值；
+   其余品牌用双类 .scheme-dark.brand-* 覆盖（特异性 0,2,0 > 0,1,0）。
+   -------------------------------------------------------------------------- */
+.scheme-dark {
+  /* 品牌：blue × dark */
+  --brand-primary: #60A5FA;
+  --brand-primary-hover: #93C5FD;
+  --brand-primary-soft: #1E3A8A;
+  --brand-primary-on-soft: #BFDBFE;
+  --brand-accent: #FBBF24;
+  --brand-accent-hover: #FCD34D;
+  --brand-accent-soft: #78350F;
+  --brand-accent-on: #451A03;
+
+  /* 中性色 */
+  --color-bg-page: #0F172A;
+  --color-bg-surface: #1E293B;
+  --color-bg-subtle: #334155;
+  --color-border: #334155;
+  --color-border-strong: #475569;
+  --color-text-primary: #F1F5F9;
+  --color-text-secondary: #CBD5E1;
+  --color-text-muted: #94A3B8;
+
+  /* 语义色（深色下提亮） */
+  --color-success: #4ADE80;
+  --color-warning: #FBBF24;
+  --color-danger: #F87171;
+  --color-info: #60A5FA;
+
+  /* 作业状态色（深色下提亮，三态仍相互可区分） */
+  --status-queued: #94A3B8;
+  --status-running: #60A5FA;
+  --status-plan-ready: #A78BFA;
+  --status-success: #4ADE80;
+  --status-partial: #FBBF24;
+  --status-failed: #F87171;
+  --status-cancelled: #64748B;
+  --status-aborted: #CBD5E1;
+
+  /* 深色下阴影可见度低，改用更重的黑，层级更多依赖边框 */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, .30);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, .40), 0 1px 2px rgba(0, 0, 0, .25);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, .45);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, .55);
+}
+
+.scheme-dark.brand-indigo {
+  --brand-primary: #818CF8;
+  --brand-primary-hover: #A5B4FC;
+  --brand-primary-soft: #312E81;
+  --brand-primary-on-soft: #C7D2FE;
+  --brand-accent: #FB7185;
+  --brand-accent-hover: #FDA4AF;
+  --brand-accent-soft: #4C0519;
+  --brand-accent-on: #4C0519;
+}
+
+.scheme-dark.brand-teal {
+  --brand-primary: #5EEAD4;
+  --brand-primary-hover: #99F6E4;
+  --brand-primary-soft: #134E4A;
+  --brand-primary-on-soft: #99F6E4;
+  --brand-accent: #BEF264;
+  --brand-accent-hover: #D9F99D;
+  --brand-accent-soft: #365314;
+  --brand-accent-on: #1A2E05;
+}
+
+.scheme-dark.brand-slate {
+  --brand-primary: #94A3B8;
+  --brand-primary-hover: #CBD5E1;
+  --brand-primary-soft: #1E293B;
+  --brand-primary-on-soft: #E2E8F0;
+  --brand-accent: #38BDF8;
+  --brand-accent-hover: #7DD3FC;
+  --brand-accent-soft: #0C4A6E;
+  --brand-accent-on: #082F49;
+}
+
+.scheme-dark.brand-violet {
+  --brand-primary: #A78BFA;
+  --brand-primary-hover: #C4B5FD;
+  --brand-primary-soft: #4C1D95;
+  --brand-primary-on-soft: #DDD6FE;
+  --brand-accent: #FBBF24;
+  --brand-accent-hover: #FCD34D;
+  --brand-accent-soft: #78350F;
+  --brand-accent-on: #451A03;
+}
+
+/* --------------------------------------------------------------------------
+   L3 Semantic —— 语义层（跨端映射层）
+   组件只引用本层；主题切换对本层透明。
+   -------------------------------------------------------------------------- */
+:root {
+  /* 品牌语义：只引用 L2，自身不写死色值 */
+  --color-primary: var(--brand-primary);
+  --color-primary-hover: var(--brand-primary-hover);
+  --color-primary-soft: var(--brand-primary-soft);
+  --color-primary-on-soft: var(--brand-primary-on-soft);
+  --color-accent: var(--brand-accent);
+  --color-accent-hover: var(--brand-accent-hover);
+  --color-accent-soft: var(--brand-accent-soft);
+  --color-accent-on: var(--brand-accent-on);
+
+  /* 中性色（不随主题变化） */
+  --color-bg-page: #F8FAFC;
+  --color-bg-surface: #FFFFFF;
+  --color-bg-subtle: #F1F5F9;
+  --color-border: #E2E8F0;
+  --color-border-strong: #CBD5E1;
+  --color-text-primary: #1E293B;
+  --color-text-secondary: #475569;
+  --color-text-muted: #64748B;
+
+  /* 语义色（不随主题变化） */
+  --color-success: #16A34A;
+  --color-warning: #D97706;
+  --color-danger: #DC2626;
+  --color-info: #2563EB;
+
+  /* 作业状态色（七态，对应 sync_runs.status；语义不同不得共用颜色） */
+  --status-queued: #64748B;
+  --status-running: #2563EB;
+  --status-plan-ready: #7C3AED;
+  --status-success: #16A34A;
+  --status-partial: #D97706;
+  --status-failed: #DC2626;
+  --status-cancelled: #94A3B8;
+  --status-aborted: #475569;
+
+  /* 字体
+     未引入 web font：Fira Sans / Fira Code 若本地缺失则回退系统字体，
+     避免外部请求与跨端不一致；如需强一致可在构建期自托管字体文件。 */
+  --font-family-base: 'Fira Sans', PingFang SC, HarmonyOS Sans SC, Noto Sans SC, sans-serif;
+  --font-family-mono: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --font-size-display: 24px;
+  --line-height-display: 32px;
+  --font-size-h1: 20px;
+  --line-height-h1: 28px;
+  --font-size-h2: 16px;
+  --line-height-h2: 24px;
+  --font-size-body: 14px;
+  --line-height-body: 22px;
+  --font-size-sm: 13px;
+  --line-height-sm: 20px;
+  --font-size-caption: 12px;
+  --line-height-caption: 18px;
+  --font-size-code: 13px;
+  --line-height-code: 20px;
+
+  --font-weight-regular: 400;
+  --font-weight-semibold: 600;
+
+  /* 间距（8px 栅格） */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* 圆角 / 边框 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 999px;
+  --border-width: 1px;
+
+  /* 阴影（仅表达层级，不用于装饰） */
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, .06);
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, .08), 0 1px 2px rgba(15, 23, 42, .04);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, .10);
+  --shadow-lg: 0 12px 32px rgba(15, 23, 42, .14);
+
+  /* 动效 */
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 240ms;
+  --ease-standard: cubic-bezier(.2, 0, 0, 1);
+
+  /* 布局尺寸（规范 §3.2） */
+  --sidebar-width: 240px;
+  --sidebar-width-collapsed: 64px;
+  --topbar-height: 56px;
+  --content-max-width: 1280px;
+}
+
+/* --------------------------------------------------------------------------
+   随明暗变化的语义令牌
+   必须放在 L3 :root **之后**：`:root` 与 `.scheme-*` 特异性同为 0,1,0，
+   同名令牌由源顺序决胜；若写在前面的品牌块里，会被 L3 的浅色默认值反覆盖，
+   结果是深色模式下「主色底上的文字」仍是白色（浅蓝底白字不达 WCAG AA）。
+   -------------------------------------------------------------------------- */
+:root,
+.scheme-light {
+  /* 主色底上的文字：浅色主题主色为深色 → 配白字 */
+  --color-primary-contrast: #FFFFFF;
+  --color-danger-contrast: #FFFFFF;
+  /* 遮罩（抽屉 / 弹层背板）。不用毛玻璃：小程序不支持 backdrop-filter（§6.1） */
+  --color-overlay: rgba(15, 23, 42, .45);
+}
+
+.scheme-dark {
+  /* 深色下主色 / 危险色已提亮 → 底上文字改用深色 */
+  --color-primary-contrast: #0F172A;
+  --color-danger-contrast: #0F172A;
+  --color-overlay: rgba(0, 0, 0, .55);
+}
+
+/* --------------------------------------------------------------------------
+   L4 Component —— 组件级通用令牌（就近覆盖用）
+   -------------------------------------------------------------------------- */
+:root {
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --focus-ring-color: var(--color-primary);
+}

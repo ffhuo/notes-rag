@@ -1,0 +1,92 @@
+/* ==========================================================================
+   notes-rag 基础样式（reset + 排版基线）
+   规范来源：docs/ui-spec.md §2.4 / §2.7 / §7
+
+   只放全局基线；组件样式一律写在各自组件内，避免基线膨胀。
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #app { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--color-bg-page);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-regular);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 标题与段落的默认 margin 归零（间距一律由布局令牌显式给出） */
+h1, h2, h3, h4, h5, h6, p, figure, blockquote, dl, dd { margin: 0; }
+ul, ol { margin: 0; padding: 0; }
+
+h1 {
+  font-size: var(--font-size-h1);
+  line-height: var(--line-height-h1);
+  font-weight: var(--font-weight-semibold);
+}
+h2 {
+  font-size: var(--font-size-h2);
+  line-height: var(--line-height-h2);
+  font-weight: var(--font-weight-semibold);
+}
+
+a { color: var(--color-primary); text-decoration: none; }
+a:hover { color: var(--color-primary-hover); text-decoration: underline; }
+
+img, svg, video { display: block; max-width: 100%; }
+
+/* 表单控件继承排版，避免浏览器默认字体破坏一致性 */
+button, input, select, textarea { font: inherit; color: inherit; }
+
+/* 数值 / 标识符使用等宽（score、run_id、路径、chunk_id） */
+code, pre, kbd, samp {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-code);
+  line-height: var(--line-height-code);
+}
+
+/* 仅供读屏的文本：颜色不是唯一状态指示时（如纯圆点徽章）用它补文本（规范 §7） */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 键盘焦点必须可见（规范 §7）；鼠标点击不显示焦点环 */
+:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+:focus:not(:focus-visible) { outline: none; }
+
+/* 滚动条（桌面浏览器；小程序 / RN 会忽略） */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: var(--radius-full);
+  border: 2px solid var(--color-bg-page);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+
+/* 尊重系统「减少动态效果」偏好（规范 §2.7） */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

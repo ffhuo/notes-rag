@@ -43,8 +43,21 @@ def verify_api_key(raw: str | None, expected: str) -> bool:
     return hmac.compare_digest(raw, expected)
 
 
+def _open_access() -> bool:
+    """是否处于「本机免鉴权」状态：单用户模式且未配置 API_KEY（见 §17.3）。
+
+    单用户模式本就是单机自用场景，默认不配 key；此时若仍强制 X-API-Key，
+    前端就必须发明一套凭据录入流程，与「后台默认登录」的目标相悖。
+    多用户模式**不适用**本捷径 —— 那里必须凭账号登录，否则会绕过用户隔离。
+    """
+    return not settings.enable_multiuser and not settings.api_key
+
+
 async def get_current_api_key(x_api_key: str = Header(None, alias="X-API-Key")) -> str:
     """FastAPI 依赖：校验 X-API-Key，通过返回 "default"（单用户 owner）。"""
+    if _open_access():
+        return "default"
+
     if not verify_api_key(x_api_key, settings.api_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -103,6 +116,10 @@ async def get_current_user(
     authorization: str = Header(None, alias="Authorization"),
 ) -> str:
     """FastAPI 依赖：先判 X-API-Key，再判 Bearer JWT，返回 user_id。"""
+    # 0) 单用户且未配 Key：本机免鉴权（前端无需任何凭据即可进入）
+    if _open_access():
+        return "default"
+
     # 1) X-API-Key 匹配 → 单用户 owner
     if verify_api_key(x_api_key, settings.api_key):
         return "default"

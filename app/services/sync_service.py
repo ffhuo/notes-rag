@@ -102,7 +102,9 @@ async def sync_vault(
     start = time.monotonic()
     result = SyncResult(vault_id=vault.id, mode=mode)  # type: ignore[call-arg]
 
-    # 护栏 1：源可达。不可达 → ABORT，绝不当成「内容全删了」
+    # [probe] 源可达校验（护栏 1）。不可达 → ABORT，绝不当成「内容全删了」
+    if progress:
+        await progress.advance("probe", None)
     if not local_path.exists() or not local_path.is_dir():
         result.blocked_reason = "source_unavailable"
         result.prune_blocked = True
@@ -110,7 +112,7 @@ async def sync_vault(
         logger.error("sync 中止：源不可达", vault_id=vault.id, path=str(local_path))
         return result
 
-    # [scan] 遍历磁盘（total 不可知 → None）
+    # [scan] 遍历磁盘：此阶段只统计文件数，总量事先不可知 → None（前端显示不确定态）
     if progress:
         await progress.advance("scan", None)
     # os.walk + stat 是同步阻塞 IO，放到线程池，避免卡住事件循环
@@ -126,17 +128,27 @@ async def sync_vault(
             dry_run, start, result, progress,
         )
 
-    # [diff] 计算新增 / L1 不一致文件的 hash（L2，按需读盘，阻塞 IO 放线程池）
-    sigs: dict[str, FileSig] = {}
+    # [diff] 需要算 hash（L2）的文件 = 新增 + L1 不一致，这批文件数就是本阶段的确定总量，
+    # 也是用户能看到的第一个「本次要处理多少文件」的数（M03 §5.13.3）
+    need_hash: list[str] = []
     for rel, sig in seen.items():
-        need_hash = rel not in known
-        if not need_hash:
-            n = known[rel]
-            need_hash = n.size_bytes != sig.size_bytes or n.mtime_ns != sig.mtime_ns
-        if need_hash:
+        n = known.get(rel)
+        if n is None or n.size_bytes != sig.size_bytes or n.mtime_ns != sig.mtime_ns:
+            need_hash.append(rel)
+    if progress:
+        await progress.advance("diff", len(need_hash))
+
+    sigs: dict[str, FileSig] = {}
+    need_hash_set = set(need_hash)
+    for rel, sig in seen.items():
+        if rel in need_hash_set:
             sig.content_hash = await asyncio.to_thread(
                 ingest_service.file_content_hash, local_path / rel
             )
+            if progress:
+                await progress.tick(rel, f"比对 {rel}")
+            # 紧密循环里让出事件循环，避免长时间独占（M03 §5.13.8）
+            await _yield()
         sigs[rel] = sig
 
     # 对账 + 护栏 2/3
@@ -401,13 +413,24 @@ def _scan(root: Path, filters: "Optional[IngestFilters]") -> tuple[dict[str, Fil
     )
     includes = filters.include if filters and filters.include else None
     excludes = filters.exclude if filters and filters.exclude else None
+    # 整目录排除的前缀集合：命中即在 os.walk 层剪掉整棵子树（见 _exclude_dir_prefixes）
+    exclude_prefixes = _exclude_dir_prefixes(excludes)
 
     seen: dict[str, FileSig] = {}
     scan_complete = True
 
     for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = Path(dirpath).relative_to(root).as_posix()
+        keep: list[str] = []
+        for d in dirnames:
+            if d in exclude_dirs or d.startswith("."):
+                continue
+            sub_rel = d if rel_dir == "." else f"{rel_dir}/{d}"
+            if sub_rel in exclude_prefixes:
+                continue
+            keep.append(d)
         # 原地修改 dirnames 实现目录剪枝
-        dirnames[:] = [d for d in dirnames if d not in exclude_dirs and not d.startswith(".")]
+        dirnames[:] = keep
         for fn in filenames:
             abs_p = Path(dirpath) / fn
             rel = abs_p.relative_to(root).as_posix()
@@ -427,6 +450,31 @@ def _scan(root: Path, filters: "Optional[IngestFilters]") -> tuple[dict[str, Fil
                 logger.warning("扫描文件失败", path=rel, error=str(e))
 
     return seen, scan_complete
+
+
+def _exclude_dir_prefixes(excludes: "Optional[list[str]]") -> set[str]:
+    """从 filters.exclude 里提取「整目录排除」的目录前缀，供 os.walk 剪枝。
+
+    只认 `<目录>/**` 与 `<目录>/` 两种写法，且目录部分不含通配符 —— 这两类模式在
+    文件级 fnmatch 下的效果就是「整棵子树全排除」，故按目录前缀剪枝不会改变结果，
+    只是省掉大量 stat 与目录遍历。其余写法（如 `*.tmp`、`**/build/**`）不剪枝，
+    由文件级 fnmatch 兜底（fnmatch 的 `*` 会跨 `/` 匹配，嵌套场景依然生效）。
+    """
+    out: set[str] = set()
+    for pat in excludes or []:
+        p = pat.strip()
+        if p.endswith("/**"):
+            prefix = p[:-3]
+        elif p.endswith("/"):
+            prefix = p.rstrip("/")
+        else:
+            continue
+        if prefix.startswith("./"):
+            prefix = prefix[2:]
+        if not prefix or any(ch in prefix for ch in "*?["):
+            continue
+        out.add(prefix)
+    return out
 
 
 def _norm_exts(exts: list[str]) -> set[str]:

@@ -28,3 +28,4 @@ app/static/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/tokens/
