@@ -1,4 +1,4 @@
-# .dockerignore — 避免把密钥 / 运行时数据 / 虚拟环境打进镜像
+# .dockerignore — 避免把密钥 / 运行时数据 / 虚拟环境 / 前端依赖打进镜像
 .venv/
 venv/
 __pycache__/
@@ -10,4 +10,19 @@ data/
 logs/
 tests/
 *.md
+# 例外：pyproject.toml 的 readme 指向它，构建阶段需要可用
+!README.md
 docker-compose.yml
+
+# 前端依赖与构建产物：镜像内由 Stage 1 重新构建，避免把宿主 node_modules 带进运行时镜像
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+app/static/
+
+# 本地缓存与编辑器/系统文件
+.pytest_cache/
+.mypy_cache/
+.idea/
+.vscode/
+.DS_Store

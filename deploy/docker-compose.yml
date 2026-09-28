@@ -14,10 +14,19 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "8000"
+      # 覆盖 .env 的 DEBUG：生产关闭（不暴露 /docs、不打印 SQL、不开 reload）
+      DEBUG: "false"
     env_file:
       - ../.env
     volumes:
       - ../data:/app/data          # Chroma + SQLite 持久化（容器重建不丢索引）
+      - ../logs:/app/logs          # 日志持久化（LOG_FILE / LOG_ERROR_FILE）
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   # 可选：生产用 Nginx 反代 + TLS（见 deploy/nginx.conf.example）
   # 启用后建议去掉上面 notes-rag 的 ports 映射，仅暴露给内部网络

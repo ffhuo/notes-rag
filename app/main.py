@@ -19,11 +19,13 @@ sync 本身幂等，重跑一次比持久化中间态简单得多，也更不容
 
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from app.api.router import router as api_router
@@ -116,14 +118,42 @@ def create_app() -> FastAPI:
     # 路由（统一从 app/api/router.py 聚合引用）
     app.include_router(api_router)
 
+    # ===== 前端静态托管（单镜像部署：SPA 与 API 同源，免 CORS）=====
+    # 产物由 frontend/ 的 vite build 输出到 app/static（见 frontend/vite.config.js）。
+    # 未构建 / UI_ENABLED=false 时退化为纯 API：根路径返回服务信息 JSON。
+    static_dir = Path(__file__).parent / "static"
+    index_file = static_dir / "index.html"
+    ui_ready = settings.ui_enabled and index_file.is_file()
+    if settings.ui_enabled and not ui_ready:
+        logger.warning("UI_ENABLED=true 但未找到前端产物 {}，本次仅提供 API", index_file)
+
     # 根路由
     @app.get("/", include_in_schema=False)
     async def root():
+        if ui_ready:
+            return FileResponse(index_file)
         return {
             "message": "RAG API",
             "version": app.version,
             "docs_url": "/docs" if settings.DEBUG else None,
         }
+
+    if ui_ready:
+        # 构建产物除 index.html 外统一位于 /assets 下
+        assets_dir = static_dir / "assets"
+        if assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def spa_fallback(full_path: str):
+            """SPA 兜底：未命中的前端子路由返回 index.html；API 未命中仍返回 404。"""
+            if full_path == "api" or full_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="Not Found")
+            # 根级静态文件（favicon 等）：仅放行目录内真实文件，防路径穿越
+            candidate = (static_dir / full_path).resolve()
+            if full_path and candidate.is_file() and candidate.is_relative_to(static_dir.resolve()):
+                return FileResponse(candidate)
+            return FileResponse(index_file)
 
     # 401 鉴权失败统一格式
     @app.exception_handler(401)
