@@ -41,11 +41,13 @@ from app.services import image_service
 from app.services.model_service import collection_name
 
 # 扩展名 → chunker 格式（决定是否按标题切分）
-# .docx / .pdf 也走 markdown：解析器输出的就是 markdown 语法（标题 / 页码 → # 前缀），
-# 走 markdown 模式才能按小节切分并生成面包屑
+# .docx / .pdf / .xlsx 也走 markdown：解析器输出的就是 markdown 语法
+# （标题 / 页码 / sheet 名 → # 前缀，表格 → GFM pipe table），走 markdown 模式
+# 才能按小节切分、生成面包屑，并让表格保护（超长表格拆分时重复表头）生效
 _FMT_BY_EXT = {
     ".md": "markdown", ".markdown": "markdown", ".html": "html", ".htm": "html",
     ".docx": "markdown", ".pdf": "markdown",
+    ".xlsx": "markdown", ".xlsm": "markdown",
 }
 
 # .env 种子运行时（无 ModelProfile 行）在集合命名中的 profile 占位

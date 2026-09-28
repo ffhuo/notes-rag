@@ -25,7 +25,7 @@ import os
 import re
 from pathlib import Path
 
-import docx  # 可选依赖：未安装时模块 import 失败，由 __init__ 捕获并跳过注册
+import docx
 from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph

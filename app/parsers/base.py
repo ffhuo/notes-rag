@@ -145,7 +145,7 @@ def normalize_ext(ext: str) -> str:
 def parse_file(path: Path) -> ParsedDocument | None:
     """便捷函数：按扩展名自动路由到已注册 parser 并解析。
 
-    未注册的扩展名（未知格式或可选依赖未安装）返回 None。
+    未注册的扩展名（未知格式）返回 None。
     """
     from app.parsers.registry import get_parser
 

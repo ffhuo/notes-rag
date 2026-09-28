@@ -29,14 +29,9 @@ dependencies = [
     "pillow>=10.0",
     "python-docx>=1.2.0",
     "pymupdf>=1.28.2",
-]
-
-# 可选依赖：多格式文档解析（design.md §16.1）。主线 `uv sync` 不安装；
-# 需要 Excel 时：`uv add openpyxl` 或 `uv sync --extra docs`
-# （Word(.docx)、PDF 已实现并升为主依赖，见上方 dependencies）
-[project.optional-dependencies]
-docs = [
-    "openpyxl>=3.1",       # Excel(.xlsx) 解析（app/parsers/excel.py，待实现）
+    # Excel(.xlsx/.xlsm) 解析（app/parsers/excel.py，见 docs/design.md §16.1）
+    # openpyxl 只读 OOXML，不支持老式 .xls（pandas/xlrd 方案已停更，一期不覆盖）
+    "openpyxl>=3.1",
 ]
 
 # PEP 735 开发依赖组（不参与生产部署）

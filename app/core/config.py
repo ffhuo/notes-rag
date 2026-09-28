@@ -43,8 +43,8 @@ class Settings(BaseSettings):
     version: str = "0.1.0"
 
     # ===== 摄取过滤（多格式 / 文件夹过滤，见 docs/design.md §16）=====
-    # Word(.docx) / PDF 已启用（python-docx、pymupdf 为主依赖）；Excel 随 parser 实现启用
-    ingest_exts: StrList = ["md", "txt", "docx", "pdf"]
+    # Word(.docx) / PDF / Excel(.xlsx) 均为主依赖，默认启用（.xlsm 可按需显式加入）
+    ingest_exts: StrList = ["md", "txt", "docx", "pdf", "xlsx"]
     # 默认排除目录：避免构建产物 / 版本控制 / 应用配置 / 缓存等无关目录灌库
     ingest_exclude_dirs: StrList = [
         "node_modules", ".git", ".obsidian", ".trash", "__pycache__", ".venv",

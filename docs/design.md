@@ -24,7 +24,7 @@
 **关键能力一览**：
 
 - 多源 vault 摄取（本地引用 / 上传 zip / git / 远程），支持文件与文件夹过滤
-- 多格式解析（`.md` / `.txt` / `.docx` / `.pdf`；Excel 已预留契约）。PDF 支持扫描件：
+- 多格式解析（`.md` / `.txt` / `.docx` / `.pdf` / `.xlsx`）。PDF 支持扫描件：
   无文本层的页面整页转图后走多模态 LLM 识别，不引入 OCR 引擎
 - **多 LLM / 多 Embedding 可配置可选**（LLM 每次请求可换；Embedding 与索引绑定，换模型需重建索引）
 - 前端 SPA（Vault 管理 / 检索 / 问答 / 模型管理），同源托管单端口
@@ -109,12 +109,12 @@ app/
     embedder.py          # 文本 → 向量（OpenAI 兼容 embedding，async）
     vectorstore.py       # Chroma 封装：add / query / reset
     llm_client.py        # LLM 调用（chat.completions.create, stream=True）
-  parsers/               # 多格式解析层（已实现 md/txt/docx/pdf，excel 预留）
+  parsers/               # 多格式解析层（已实现 md/txt/docx/pdf/xlsx）
     base.py              # DocumentParser 抽象基类 + ParsedDocument（含自注册）
     registry.py          # register / get_parser
     markdown.py · text.py            # 一期实现
     docx.py · pdf.py                 # 已实现（python-docx / pymupdf，主依赖）
-    excel.py                         # 预留（依赖可选，见 pyproject 的 docs extra）
+    excel.py                         # 已实现（openpyxl，主依赖；.xlsx / .xlsm）
   mcp/
     server.py            # MCP server（stdio / Streamable HTTP），把 services 封装成 tools  ← 手写
   static/                # 构建后的前端静态产物（由 frontend/ 构建产出，gitignore）
@@ -428,7 +428,7 @@ sync_runs(id PK, user_id, vault_id, trigger, mode, dry_run,
 | M08 | 多模型管理 | **P7** | `model_profiles`、LLM/Embedding/ASR 差异约束、三级解析、collection 命名、配置页管理（无 `.env` 兜底） |
 | M09 | Agent 接入（MCP / Skill） | **P8** | MCP tools 封装、stdio / Streamable HTTP 取舍、客户端配置、Skill 补充 |
 | M10 | 部署方案 | **P9** | 本地 / Docker、数据卷、反代要点、远程访问强制检查单、容量估算 |
-| M11 | 多格式解析与过滤 | **P10** | 类型矩阵、各格式解析要点、可选依赖、启用路径（仅契约·预留） |
+| M11 | 多格式解析与过滤 | **P10** | 类型矩阵、各格式解析要点、启用路径（md/txt/docx/pdf/xlsx 已实现） |
 | 附录 A | 测试策略与质量保障 | 贯穿 | 测试分层、mock 契约、样本数据、质量门禁、回归清单 |
 
 ### 11.2 参考资料（非模块设计）

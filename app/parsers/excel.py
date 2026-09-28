@@ -1,48 +1,95 @@
-"""解析器·Excel — 预留，依赖可选（openpyxl，见 docs/design.md §16.1）。
+"""解析器·Excel — .xlsx / .xlsm 转 Markdown（docs/design.md §16.1）。
 
-能力（待实现）：
-- 用 openpyxl 遍历每个 sheet，转成「表名 + 行列文本」的可读字符串
-- 注意：openpyxl 仅支持 .xlsx / .xlsm；老 .xls 需 pandas+engine 或 xlrd（已停更），一期不覆盖
+能力：
+- openpyxl 逐 sheet 读取，输出「`# sheet名` 标题 + GFM pipe table」
+- 首行作表头，其后补分隔行 —— 与 docx 的表格输出规范一致，chunker 的表格保护
+  （`_MD_TABLE_RE`）才认得出；超长表格切分时每个子表都会重复表头
+- 单元格规整：None → 空串、`|` → `\\|`、换行压成空格；每行补齐到最宽行的列数
+  （ragged row 会让 GFM 表格错位）
 
-启用步骤：
-1) uv add openpyxl   （或 uv sync --extra docs）
-2) 补全下方 parse() 实现
-3) 把 'xlsx' 加入 config.ingest_exts 或请求 filters.exts
-
-注意：本模块顶部 import openpyxl；若未安装，app/parsers/__init__.py 会静默跳过注册，
-      不会拖垮主流程（get_parser('.xlsx') 返回 None，ingest 跳过该文件）。
+取舍：
+- data_only=True：取公式的**计算结果**而非 `=SUM(...)` 公式串（索引公式文本没有检索价值；
+  若工作簿从未被 Excel 计算并保存过，公式单元格会读到 None）
+- read_only=True：流式读取，避免大表把整簿载入内存
+- 不支持老式 .xls：openpyxl 只能读 OOXML（.xlsx/.xlsm），故 supported_exts 不含 .xls
 
 关联方案：docs/design.md §16（多格式文件与过滤设计）。
 """
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
-import openpyxl  # 可选依赖：未安装时模块 import 失败，由 __init__ 捕获并跳过注册
+import openpyxl
 
 from app.parsers.base import DocumentParser, ParsedDocument
 from app.parsers.registry import register
 
 
+def _cell_text(value: object) -> str:
+    """单元格值 → 单行文本：None 归一为空串，换行压成空格，`|` 转义。
+
+    `|` 不转义会多切出一列、整张表错位；单元格内换行不压平会让表格断行。
+    """
+    if value is None:
+        return ""
+    text = str(value).strip()
+    for ch in ("\r\n", "\n", "\r"):
+        text = text.replace(ch, " ")
+    return text.replace("|", "\\|")
+
+
+def _iter_text_rows(sheet: openpyxl.worksheet.worksheet.Worksheet) -> Iterator[list[str]]:
+    """逐行产出单元格文本，跳过全空行。
+
+    全空行必须丢弃：GFM 表格里夹一个空行会把表格截断，后半段退化成普通文本。
+    """
+    for row in sheet.iter_rows(values_only=True):
+        cells = [_cell_text(value) for value in row]
+        if any(cells):
+            yield cells
+
+
+def _render_table(rows: list[list[str]]) -> str:
+    """二维单元格 → GFM pipe table：首行表头 + 分隔行 + 数据行。
+
+    每行补齐到最宽行的列数：数据行列数与表头不一致时，GFM 渲染会错位或丢列。
+    """
+    width = max(len(row) for row in rows)
+    padded = [row + [""] * (width - len(row)) for row in rows]
+    lines = [
+        "| " + " | ".join(padded[0]) + " |",
+        "| " + " | ".join(["---"] * width) + " |",
+    ]
+    lines.extend("| " + " | ".join(row) + " |" for row in padded[1:])
+    return "\n".join(lines)
+
+
 class ExcelParser(DocumentParser):
-    supported_exts = (".xlsx", ".xls")
+    supported_exts = (".xlsx", ".xlsm")
 
     def parse(self, path: Path) -> ParsedDocument:
-        # TODO(预留): 安装 openpyxl 后补全，示例：
-        #   wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-        #   parts = []
-        #   for ws in wb.worksheets:
-        #       parts.append(f"# {ws.title}")
-        #       for row in ws.iter_rows(values_only=True):
-        #           cells = ["" if c is None else str(c) for c in row]
-        #           parts.append(" | ".join(cells))
-        #   text = "\n".join(parts)
-        #   meta = {"source_type": "excel", "sheets": wb.sheetnames}
-        #   return ParsedDocument(content=text, title=path.stem,
-        #                         mtime=os.path.getmtime(path), meta=meta)
-        raise NotImplementedError(
-            "Excel 解析预留：请先 `uv add openpyxl` 并补全 parse()（见 docs/design.md §16）"
+        workbook = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+        try:
+            blocks: list[str] = []
+            for sheet in workbook.worksheets:
+                rows = list(_iter_text_rows(sheet))
+                if not rows:
+                    continue                    # 空 sheet 不产出标题，免得留下只有标题的空分块
+                blocks.append(f"# {sheet.title}")
+                blocks.append(_render_table(rows))
+            content = "\n\n".join(blocks)
+            meta = {"source_type": "excel", "sheets": list(workbook.sheetnames)}
+        finally:
+            # read_only 模式必须显式关闭，否则底层 zip 句柄要到 GC 才释放
+            workbook.close()
+
+        return ParsedDocument(
+            content=content,
+            title=path.stem,
+            mtime=os.path.getmtime(path),
+            meta=meta,
         )
 
 
