@@ -28,6 +28,7 @@
 关联方案：docs/design.md §5（API 设计）、§10（手写 TODO 地图）、§18（多模型管理）。
 变更管理（增量同步 / 删除护栏 / 一致性自检）详见设计文档库 M03 §5.8–§5.12。
 """
+from datetime import datetime
 from typing import Any, List, Literal
 
 from pydantic import BaseModel, SecretStr
@@ -426,3 +427,27 @@ class UserOut(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+# ===== 用户级 API Key（agent / 第三方接入鉴权，见 M06 §5.7）=====
+class ApiKeyCreate(BaseModel):
+    """创建 API Key 请求体。name 仅作备注（前端列表展示），如 "workbuddy"。"""
+
+    name: str = ""
+
+
+class ApiKeyOut(BaseModel):
+    """API Key 列表项 —— **永不含明文 key**，key_prefix 仅供识别。"""
+
+    id: int
+    name: str
+    key_prefix: str
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class ApiKeyCreated(ApiKeyOut):
+    """创建响应：继承列表项字段 + **明文 key（仅此一次，服务端不留存）**。"""
+
+    key: str

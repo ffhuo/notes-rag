@@ -32,6 +32,7 @@ from app.api.router import router as api_router
 from app.core.config import settings
 from app.core.database import close_database_engine, init_db, session_scope
 from app.core.middleware import LoggingMiddleware
+from app.mcp.server import build_http_app, mcp as mcp_server
 from app.services import run_service
 
 
@@ -67,7 +68,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # 实现建议：在 run_service 里加 submit_all(trigger="startup")，抢不到锁的 vault 静默跳过。
         # 注意别在 lifespan 里直接 await 它 —— 那会把启动阻塞到全量索引完成。
 
-        yield
+        # MCP Streamable HTTP 的会话管理器：Starlette 的 Mount **不会**自动运行子应用的
+        # lifespan，必须在父应用 lifespan 内手动启动，否则 /mcp 请求会因会话管理器未就绪而失败。
+        async with mcp_server.session_manager.run():
+            yield
     except Exception as e:
         logger.error("Failed to start application", error=str(e))
         raise
@@ -117,6 +121,11 @@ def create_app() -> FastAPI:
 
     # 路由（统一从 app/api/router.py 聚合引用）
     app.include_router(api_router)
+
+    # ===== MCP（远程 HTTP 接入）：挂到 /mcp，供 agent 直连 =====
+    # 必须在下方 SPA 兜底路由**之前**注册，否则 GET /mcp 会被兜底吞掉返回 index.html。
+    # 鉴权由工具内部按请求头解析用户级 API Key 完成（见 app/mcp/auth.py）。
+    app.mount("/mcp", build_http_app())
 
     # ===== 前端静态托管（单镜像部署：SPA 与 API 同源，免 CORS）=====
     # 产物由 frontend/ 的 vite build 输出到 app/static（见 frontend/vite.config.js）。

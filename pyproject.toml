@@ -22,8 +22,10 @@ dependencies = [
     "aiosqlite>=0.19",
     "chromadb>=0.5",
     "openai>=1.30",
-    # Agent 接入（MCP server，见 docs/design.md §14）；启用前需 `uv sync`
-    "mcp>=1.2",
+    # Agent 接入（MCP server，见 docs/design.md §14）
+    # 2.x 起 FastMCP 更名为 MCPServer（from mcp.server.mcpserver import MCPServer），
+    # 且 Streamable HTTP 的鉴权/session API 有变；app/mcp 按 2.x 编写，勿降到 1.x
+    "mcp>=2.2,<3",
     "loguru>=0.7",
     # 图片处理（多模态索引）：本地图读取宽高 / 格式校验，见 docs/design.md 图片方案
     "pillow>=10.0",

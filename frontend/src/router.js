@@ -4,6 +4,7 @@ import TasksView from './components/TasksView.vue'
 import SearchView from './components/SearchView.vue'
 import ChatView from './components/ChatView.vue'
 import ModelsView from './components/ModelsView.vue'
+import ApiKeysView from './components/ApiKeysView.vue'
 
 // SPA 路由（history 模式）。后端需对未知路径兜底返回 index.html（见 app/main.py catch-all）。
 //
@@ -21,6 +22,8 @@ const routes = [
   { path: '/search', name: 'search', component: SearchView, meta: { title: '检索' } },
   { path: '/chat', name: 'chat', component: ChatView, meta: { title: '问答' } },
   { path: '/models', name: 'models', component: ModelsView, meta: { title: '模型管理' } },
+  // 用户级 API Key（agent 接入鉴权）：签发 / 撤销，供 WorkBuddy 等使用（docs/mcp-guide.md）
+  { path: '/keys', name: 'keys', component: ApiKeysView, meta: { title: 'API Keys' } },
 ]
 
 export default createRouter({
@@ -34,7 +37,7 @@ export default createRouter({
  * 侧栏组件不再重写一遍导航文案（避免两处漂移）。
  * icon 名与路由 name 同名，见 src/icons.js。
  */
-export const NAV_ITEMS = ['vaults', 'tasks', 'search', 'chat', 'models'].map((name) => {
+export const NAV_ITEMS = ['vaults', 'tasks', 'search', 'chat', 'models', 'keys'].map((name) => {
   const target = routes.find((r) => r.name === name)
   return { name, to: target.path, label: target.meta.title, icon: name }
 })

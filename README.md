@@ -262,5 +262,6 @@ curl -X POST http://127.0.0.1:8000/api/v1/ingest \
 **代码仓库内**：
 
 - [开发方案设计·大纲](docs/design.md) —— 架构、目录结构、技术选型、数据流 / 接口 / 数据模型 / 配置总览、里程碑、全局约定、**模块文档索引（含原章节 → 模块文档映射表）**
+- [MCP 接入使用说明](docs/mcp-guide.md) —— 把个人知识库接入 WorkBuddy 等 AI 助手：签发用户级 API Key、配置 mcp.json、可用工具与效果示例、排错速查
 - [贡献指南](CONTRIBUTING.md)
 - 许可证：MIT（见 [LICENSE](LICENSE)）

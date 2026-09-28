@@ -87,6 +87,15 @@ export const authApi = {
     apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
   register: (username, password) =>
     apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ username, password }) }),
+
+  // ===== 用户级 API Key（agent 接入鉴权，见 docs/mcp-guide.md / M06 §5.7）=====
+  // 明文 key 只在 create 响应出现一次：调用方必须立刻弹窗展示 + 复制，
+  // 服务端只存 sha256 —— 关掉弹窗就再也拿不到，丢失只能撤销重建。
+  listApiKeys: () => apiFetch('/auth/api-keys'),
+  createApiKey: (name = '') =>
+    apiFetch('/auth/api-keys', { method: 'POST', body: JSON.stringify({ name }) }),
+  /** 撤销 = 软删除：立即失效（使用该 key 的 agent 马上 401），记录保留供审计。 */
+  revokeApiKey: (id) => apiFetch(`/auth/api-keys/${id}`, { method: 'DELETE' }),
 }
 
 // ===== Vault 与作业（异步 job 模型，见 M03 §5.13 / M06 §5.5）=====
