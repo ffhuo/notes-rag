@@ -225,7 +225,6 @@ vault 完全由前端 / API 运行时配置，**不在 `.env` 中管理**：在�
 | `make init-db` | 初始化 / 补齐 SQLite 表 |
 | `make clean` | 清理运行时数据与缓存 |
 | `make shell` | 进入 venv 的 python REPL |
-| `make demo` | 打开零依赖交互 Demo（`demo/index.html`） |
 | `make frontend-install` | 安装前端依赖（`frontend/`） |
 | `make frontend-dev` | 前端热重载开发（Vite，代理 `/api` 到 `:8000`） |
 | `make frontend-build` | 构建前端到 `app/static`（由后端托管） |
