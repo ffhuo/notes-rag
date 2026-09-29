@@ -224,7 +224,6 @@ The root `Makefile` wraps common operations into one-liners (uv path fallback in
 | `make init-db` | Initialize / complete SQLite tables |
 | `make clean` | Clean runtime data and caches |
 | `make shell` | Open the venv python REPL |
-| `make demo` | Open the zero-dependency interactive demo (`demo/index.html`) |
 | `make frontend-install` | Install frontend dependencies (`frontend/`) |
 | `make frontend-dev` | Frontend dev server with hot reload (Vite, proxies `/api` to `:8000`) |
 | `make frontend-build` | Build the frontend into `app/static` (served by the backend) |
