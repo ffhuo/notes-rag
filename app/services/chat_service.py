@@ -18,7 +18,7 @@
 - {"type": "done", "data": {"conversation_id": int}}：正常结束
 - {"type": "error", "data": "错误信息"}：异常结束
 
-关联方案：docs/design.md §4.3（Chat 时序）、§7（RAG 管线·Prompt/流式）、§9（Phase 3）、§18（多模型）。
+关联方案：docs/design.md §5.3（Chat·SSE 流式）、§10 模块索引 M05 / M08。
 """
 from collections.abc import AsyncIterator
 

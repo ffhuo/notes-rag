@@ -17,7 +17,7 @@
 为什么一期不暴露 ingest_vault：MCP 是「请求-响应」模型，而本项目索引是异步作业，
 agent 侧如何跟进（轮询 / 阻塞等待 / 只做只读）尚未定案，故暂缓（见 docs/mcp-guide.md §7）。
 
-关联文档：docs/design.md §14（Agent 接入方案）、docs/mcp-guide.md（接入使用说明）。
+关联文档：docs/design.md §10（模块索引 M09）、docs/mcp-guide.md（接入使用说明）。
 """
 from __future__ import annotations
 

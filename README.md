@@ -1,21 +1,14 @@
 # notes-rag
 
+English | [简体中文](README.md)
+
 > 知识库智能应用（RAG）—— 把 Markdown / 纯文本笔记（Obsidian vault 或任意目录）变成可检索、可问答的 **Web 应用**（后端 API + 前端页面）。
 > vault 在前端页面配置（添加本地目录 / 上传 vault 压缩包），是否支持多用户由配置开关决定（默认单用户）。
-> 可配置**多个 LLM / 多个 Embedding**并在使用时选择：LLM 每次请求可换；Embedding 与索引绑定，换模型需重建索引（详见设计文档库 **M08 多模型管理**）。
-> 已支持 `.md` / `.txt` / `.docx` / `.pdf` / `.xlsx` 解析（PDF 扫描件走多模态 LLM 识别）与文件/文件夹过滤（详见 **M11 多格式解析与过滤**）。
-> 本项目提供分层架构骨架与完整方案文档：`docs/design.md` 是**大纲与基础介绍**（架构 / 目录 / 选型 / 总览 / 里程碑 / 全局约定 / 模块索引），**模块级详细方案**在 `personal-lib/00-Projects/notes-rag-design/` 下按实现优先级排列。业务逻辑可按这些文档手写实现，适合练手，也适合作为自托管知识库服务直接部署。
+> 可配置**多个 LLM / 多个 Embedding**并在使用时选择：LLM 每次请求可换；Embedding 与索引绑定，换模型需重建索引（多模型设计要点见 `docs/design.md` 模块索引 M08）。
+> 已支持 `.md` / `.txt` / `.docx` / `.pdf` / `.xlsx` 解析（PDF 扫描件走多模态 LLM 识别）与文件/文件夹过滤（设计概要见 `docs/design.md` 模块索引 M11）。
+> 本项目提供分层架构与**设计大纲**：`docs/design.md`（架构 / 目录 / 选型 / 数据流 / 接口 / 数据模型 / 配置总览 / 全局约定 / 模块索引），业务逻辑可按文档逐步实现，适合练手，也适合作为自托管知识库服务直接部署。
 
-## 交互 Demo（不写代码也能看到全貌）
-
-`demo/index.html` 是一个**零依赖单文件原型**：内置模拟后端，可在浏览器里直接操作全部模块——架构分层、配置中心（LLM / Embedding 分离与回退）、**模型管理（多 LLM / 多 Embedding、切换 embedding 需重建索引的报错演示）**、Vault 管理、摄取（过滤 + 解析器路由）、检索、SSE 问答、多用户切换与隔离、MCP tools 调用、本地 / Docker 部署与健康检查。
-
-```bash
-make demo      # 直接打开 demo/index.html
-# 或：open demo/index.html
-```
-
-> 后端业务逻辑已按 `docs/design.md` 的 Phase 0 → 9 完成实现（路由 / 服务 / 仓储 / RAG 分层齐全），Demo 仅用于零依赖预览交互，实际行为以真实后端为准。
+> 后端业务逻辑已完成实现（路由 / 服务 / 仓储 / RAG 分层齐全），Demo 仅用于零依赖预览交互，实际行为以真实后端为准。
 
 ## 技术栈
 
@@ -23,11 +16,11 @@ make demo      # 直接打开 demo/index.html
 - Pydantic v2 + pydantic-settings（校验与配置）
 - SQLAlchemy 2.0 (async) + aiosqlite（元数据 / 对话历史；SQLite 开启 WAL）
 - Chroma（本地持久化向量库，集合按 `v{vault}_m{profile}` 隔离）
-- openai SDK（兼容端点，可指向 Qwen / 硅基流动 / 任意 OpenAI 兼容服务）
+- openai SDK（兼容端点，可指向任意 OpenAI 兼容服务）
 - python-docx + PyMuPDF + openpyxl（`.docx` / `.pdf` / `.xlsx` 解析）；Pillow（本地图片尺寸 / 格式校验）
 - loguru（结构化日志，支持轮转、保留与级别配置）
-- MCP Python SDK（FastMCP，Agent 接入见 M09）
-- **Vue 3 + Vite**（前端 SPA：Vault 管理 / 任务 / 检索 / 问答 / 模型管理，见设计文档库 M07 前端 SPA）
+- MCP Python SDK（FastMCP，Agent 接入见 `docs/mcp-guide.md`）
+- **Vue 3 + Vite**（前端 SPA：Vault 管理 / 任务 / 检索 / 问答 / 模型管理，设计概要见 `docs/design.md` 模块索引 M07）
 - **uv**（Rust 实现的极速 Python 包管理器，遵循标准 PEP 621）；测试用 pytest + pytest-asyncio
 
 ## 目录结构
@@ -35,9 +28,11 @@ make demo      # 直接打开 demo/index.html
 ```
 notes-rag/
 ├── docs/
-│   └── design.md            # 开发方案设计·大纲（架构 / 目录 / 选型 / 总览 / 里程碑 / 全局约定 / 模块索引）
-│   # 模块级详细设计（M01–M11 + 附录 A）与需求/选型/RAG 详解：
-│   # personal-lib/00-Projects/notes-rag-design/（modules/ 下按实现优先级排列）
+│   ├── design.md            # 开发方案设计·大纲（架构 / 目录 / 选型 / 总览 / 全局约定 / 模块索引）
+│   ├── mcp-guide.md         # MCP 接入使用说明（效果 / 三步接入 / 排错）
+│   ├── README_EN.md         # English README
+│   ├── DESIGN_EN.md         # English design overview
+│   └── MCP_GUIDE_EN.md      # English MCP guide
 ├── app/
 │   ├── main.py              # FastAPI 入口：装配路由 / 中间件 / 前端静态托管，生命周期建表 + 清理残留作业
 │   ├── api/                 # 路由层（health / ingest / search / chat / conversations / audio / vaults / auth / models）
@@ -71,15 +66,15 @@ notes-rag/
 > - 或官方脚本：`curl -LsSf https://astral.sh/uv/install.sh | sh`
 > 本机 Python 命令约定：统一用 `python`（3.12）。
 
-**依赖源默认走阿里云 PyPI 镜像**（`pyproject.toml` 的 `[[tool.uv.index]]` 与 `Makefile` 的 `UV_DEFAULT_INDEX` 均已配置），无需手动换源。
-如确需临时换源：`make sync UV_INDEX=https://pypi.org/simple`（`Makefile` 的 `UV_INDEX` 优先级高于配置文件）。
+**依赖默认从官方 PyPI 安装**；国内网络可指定镜像加速：
+`make sync UV_INDEX=https://mirrors.aliyun.com/pypi/simple/`（`Makefile` 会把它注入 `UV_DEFAULT_INDEX`，优先级高于配置文件；个人偏好也可放未入库的 `uv.toml`）。
 > 注意：清华 TUNA 镜像近期存在 403 无法下载 wheel 的问题，不建议使用。
 
 ```bash
 cd notes-rag
 
 # 1. 解析并安装依赖、创建项目内虚拟环境（./.venv），写入 uv.lock
-make install            # 等价于 uv sync --python 3.12（已注入阿里云镜像源）
+make install            # 等价于 uv sync --python 3.12
 
 # 2. 配置环境变量
 cp .env.example .env    # 按需调整 API_KEY / 摄取过滤；模型配置在「模型」页配（.env 不再提供模型配置）
@@ -186,7 +181,7 @@ vault 完全由前端 / API 运行时配置，**不在 `.env` 中管理**：在�
 - **LLM**：无状态耦合，**每次请求都能换**（`ChatRequest.llm_profile`，前端问答页下拉选择）。
 - **Embedding**：与索引强绑定 —— 向量按 `v{vault}_m{profile}` 分集合，检索必须沿用建索引时那个模型；换模型 = 对该 vault 重新索引（`POST /vaults/{id}/reindex?embed_profile=...`）。接口**故意不暴露** `SearchRequest.embed_profile`，避免「能召回但全是噪声」的静默错误。
 
-详见设计文档库 M08 多模型管理。
+详见 `docs/design.md` 模块索引 M08。
 
 ### 语音输入（可选，需配置 ASR 模型）
 
@@ -223,7 +218,7 @@ vault 完全由前端 / API 运行时配置，**不在 `.env` 中管理**：在�
 
 | 命令 | 作用 |
 | --- | --- |
-| `make install` / `make sync` | 安装依赖并创建 `.venv`（`uv sync --python 3.12`，已注入阿里云镜像源） |
+| `make install` / `make sync` | 安装依赖并创建 `.venv`（`uv sync --python 3.12`；国内可加 `UV_INDEX=<镜像>`） |
 | `make dev` | 热重载启动开发服务器（uvicorn，端口 8000） |
 | `make run` | 直接运行（`python -m app.main`） |
 | `make test` | 运行 pytest |
@@ -251,7 +246,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/ingest \
 
 ## Agent 接入（MCP / Skill）
 
-项目可被 agent（WorkBuddy、OpenClaw 等）当作知识库工具调用，方案见 **设计文档库 M09 Agent 接入（MCP / Skill）**：
+项目可被 agent（WorkBuddy、OpenClaw 等）当作知识库工具调用，接入方法见 **`docs/mcp-guide.md`**，设计概要见 `docs/design.md` 模块索引 M09：
 
 - **MCP server（主线）**：`app/mcp/server.py` 把检索 / 问答封装为标准 MCP tools，由 agent 通过 `mcp.json` 配置接入；支持 **stdio（本地零端口推荐）** 与 **Streamable HTTP（服务端部署后远程 agent 接入）** 两种传输。
 - **Skill（零部署补充）**：可额外提供 `skill/SKILL.md`，让任意支持 skill 的 agent 通过文本指令调 REST。
@@ -261,7 +256,9 @@ curl -X POST http://127.0.0.1:8000/api/v1/ingest \
 
 **代码仓库内**：
 
-- [开发方案设计·大纲](docs/design.md) —— 架构、目录结构、技术选型、数据流 / 接口 / 数据模型 / 配置总览、里程碑、全局约定、**模块文档索引（含原章节 → 模块文档映射表）**
+- [开发方案设计·大纲](docs/design.md) —— 架构、目录结构、技术选型、数据流 / 接口 / 数据模型 / 配置总览、全局约定、模块文档索引
 - [MCP 接入使用说明](docs/mcp-guide.md) —— 把个人知识库接入 WorkBuddy 等 AI 助手：签发用户级 API Key、配置 mcp.json、可用工具与效果示例、排错速查
 - [贡献指南](CONTRIBUTING.md)
 - 许可证：MIT（见 [LICENSE](LICENSE)）
+
+**English documentation**：[README](docs/README_EN.md) · [Design Overview](docs/DESIGN_EN.md) · [MCP Guide](docs/MCP_GUIDE_EN.md)

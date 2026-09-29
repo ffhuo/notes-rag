@@ -22,7 +22,7 @@ dependencies = [
     "aiosqlite>=0.19",
     "chromadb>=0.5",
     "openai>=1.30",
-    # Agent 接入（MCP server，见 docs/design.md §14）
+    # Agent 接入（MCP server，见 docs/design.md §10 模块索引 M09）
     # 2.x 起 FastMCP 更名为 MCPServer（from mcp.server.mcpserver import MCPServer），
     # 且 Streamable HTTP 的鉴权/session API 有变；app/mcp 按 2.x 编写，勿降到 1.x
     "mcp>=2.2,<3",
@@ -45,19 +45,10 @@ dev = [
     "rich>=13.0",
 ]
 
-[[tool.uv.index]]
-url = "https://mirrors.aliyun.com/pypi/simple/"
-default = true
-
 [tool.uv]
 # 本项目是应用而非可发布库，禁止 uv 将自身 editable 安装为包
 package = false
 # 虚拟环境默认建在项目内 ./.venv，便于 IDE / 本机命令统一管理
-# 本机为 Intel Mac（darwin x86_64）：锁定解析到当前平台，避免选到无 x86_64 wheel 的依赖
-# （如 onnxruntime 新版仅提供 arm64/linux/win wheel，会导致 uv sync 安装失败）
-required-environments = [
-    "sys_platform == 'darwin' and platform_machine == 'x86_64'",
-]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

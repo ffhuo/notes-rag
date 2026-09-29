@@ -19,7 +19,7 @@
 - `file_path` 存**相对 vault 根的 POSIX 相对路径**，不是绝对路径
 - 向量的增删**不在本模块**：repo 只碰 SQLite，Chroma 由 service 调用 vectorstore
 
-关联方案：docs/design.md §6（数据模型）、§10（手写 TODO 地图）。
+关联方案：docs/design.md §7（数据模型总览）。
 """
 from dataclasses import dataclass
 

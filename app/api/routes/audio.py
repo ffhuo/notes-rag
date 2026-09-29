@@ -21,7 +21,7 @@
 
 鉴权：只用 get_current_user_id（不要再叠加 get_current_api_key，见 conversations.py 同注）。
 
-关联方案：docs/design.md §18（多模型管理）、§4.3（Chat）。
+关联方案：docs/design.md §5.3（Chat·SSE 流式）、§10 模块索引 M08（多模型）。
 """
 import base64
 import time

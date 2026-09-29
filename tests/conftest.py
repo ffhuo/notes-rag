@@ -11,5 +11,5 @@
 - mock_embedder / mock_llm: 替换 RAG 组件
 - client: FastAPI TestClient
 
-关联方案：docs/design.md §11（测试策略）。
+关联方案：docs/design.md §9.1（测试与质量）。
 """

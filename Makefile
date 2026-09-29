@@ -8,11 +8,13 @@
 # 定位 uv：优先用 PATH 中的 uv，否则回退到 pyenv 安装的固定路径
 UV := $(shell command -v uv 2>/dev/null || echo $(HOME)/.pyenv/versions/3.12.12/bin/uv)
 
-# 默认使用阿里云 PyPI 镜像，覆盖全局 UV_DEFAULT_INDEX（如清华镜像）以避免 403 下载失败。
-# 如需换源：make sync UV_INDEX=https://pypi.org/simple
-UV_INDEX ?= https://mirrors.aliyun.com/pypi/simple/
-# export 后所有 target 的 uv 调用（包括 uv run 的隐式 sync）都会继承此源
+# 依赖默认走官方 PyPI；国内网络可指定镜像：make sync UV_INDEX=https://mirrors.aliyun.com/pypi/simple/
+# UV_INDEX 非空时才注入 UV_DEFAULT_INDEX，此后所有 target 的 uv 调用（含 uv run 的隐式 sync）都继承此源
+UV_INDEX ?=
+
+ifneq ($(UV_INDEX),)
 export UV_DEFAULT_INDEX = $(UV_INDEX)
+endif
 
 # make ingest 的传参变量（拼进 API 请求体，非应用配置项；vault 配置见 .env.example 说明）
 IMAGE ?= notes-rag

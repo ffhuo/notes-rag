@@ -1,7 +1,7 @@
 <script setup>
 // 模型管理页（T3.3 / 规范 §5.5）—— LLM / Embedding 两张表 + 增删改与试连。
 //
-// 关键差异必须讲清楚（design.md §18）：
+// 关键差异必须讲清楚（design.md §10 模块索引 M08）：
 //   · LLM 无状态 —— 问答时随便换
 //   · Embedding 与索引强绑定 —— 换模型必须对该 vault 重建索引，否则新旧向量混在同一 collection
 // 因此删除被 vault 引用的 embedding **提前拦截**（按钮置灰 + 说明原因），

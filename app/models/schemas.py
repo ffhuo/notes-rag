@@ -25,8 +25,8 @@
   - SyncRunOut: 同步运行记录（前端展示「上次同步做了什么」）
   - DoctorReport: 三向一致性自检 { ghost_vectors, missing_vectors, orphan_notes, model_mismatch }
 
-关联方案：docs/design.md §5（API 设计）、§10（手写 TODO 地图）、§18（多模型管理）。
-变更管理（增量同步 / 删除护栏 / 一致性自检）详见设计文档库 M03 §5.8–§5.12。
+关联方案：docs/design.md §6（接口总览）、§7（数据模型总览）。
+变更管理（增量同步 / 删除护栏 / 一致性自检）详见 docs/design.md §5.1.1 与模块索引 M03。
 """
 from datetime import datetime
 from typing import Any, List, Literal
@@ -293,7 +293,7 @@ class TranscribeOut(BaseModel):
     elapsed_ms: int = 0
 
 
-# ===== 多模型管理（见 docs/design.md §18）=====
+# ===== 多模型管理（见 docs/design.md §10 模块索引 M08）=====
 class ModelRuntime(BaseModel):
     """解析后的运行时模型配置 —— rag 层（embedder / llm_client）唯一依赖的模型对象。
 

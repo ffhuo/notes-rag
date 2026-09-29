@@ -1,4 +1,4 @@
-"""ORM·模型配置 — model_profiles 表（LLM / Embedding 多模型管理，design.md §18）。"""
+"""ORM·模型配置 — model_profiles 表（LLM / Embedding 多模型管理，design.md §10 模块索引 M08）。"""
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import String, Boolean, DateTime, func
 

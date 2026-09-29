@@ -184,7 +184,7 @@ export const audioApi = {
   },
 }
 
-// ===== 多模型管理（见 docs/design.md §18）=====
+// ===== 多模型管理（见 docs/design.md §10 模块索引 M08）=====
 // 一个模型配置 = model_profiles 一条记录；kind: 'llm' | 'embed'
 export const modelsApi = {
   list: (kind) => apiFetch(`/models${kind ? `?kind=${kind}` : ''}`),

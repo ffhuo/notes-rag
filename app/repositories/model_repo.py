@@ -1,4 +1,4 @@
-"""数据访问·模型配置 — model_profiles 表的 CRUD（多模型管理，见 design.md §18）。
+"""数据访问·模型配置 — model_profiles 表的 CRUD（多模型管理，见 design.md §10 模块索引 M08）。
 
 能力：
 - 一个用户可配置多个 LLM（kind='llm'）与多个 Embedding（kind='embed'），使用时按 name / id 选择
@@ -16,7 +16,7 @@
 - async def delete_profile(session, profile) -> None
 - async def count_profiles(session, kind=None) -> int
 
-关联方案：docs/design.md §18.1（数据模型）、§18.3（解析优先级）、§18.4（种子规则）。
+关联方案：docs/design.md §10 模块索引 M08（多模型管理：数据模型 / 解析优先级 / 种子规则）。
 """
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession

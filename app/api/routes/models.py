@@ -23,7 +23,7 @@
 分层约定：本文件只做「入参校验 + 调 service + 把领域异常翻译成 HTTP 状态码」，
 DB 读写一律经 model_repo / model_service，不在路由里写 SQL。
 
-关联方案：docs/design.md §18（多模型管理）、§8（配置与安全）。
+关联方案：docs/design.md §8（配置总览）、§10 模块索引 M08（多模型管理）。
 """
 import json
 

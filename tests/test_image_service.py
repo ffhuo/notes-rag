@@ -11,7 +11,7 @@
   raw（原语法，供回填）/ offset（本片内偏移）
 - 「哪个 LLM 支持图片输入」由 resolve_image_runtime 解析（默认项优先，无则任一启用的多模态 LLM）
 
-关联方案：图片处理方案；docs/design.md §11（测试策略）。
+关联方案：图片处理方案；docs/design.md §9.1（测试与质量）。
 """
 import base64
 import hashlib

@@ -29,3 +29,6 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/tokens/
+
+# 本机 uv 配置（PyPI 镜像加速等个人偏好），不入仓库
+uv.toml

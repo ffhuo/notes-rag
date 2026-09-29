@@ -12,7 +12,7 @@
 - async def retrieve(query, *, top_k, threshold, vault_id, embed_profile_id, embed_runtime)
       -> list[ChunkHit]
 
-关联方案：docs/design.md §4.2（Search 时序）、§9（Phase 2）、§18（多模型）。
+关联方案：docs/design.md §5.2（Search 数据流）、§10 模块索引 M04 / M08。
 """
 import json
 

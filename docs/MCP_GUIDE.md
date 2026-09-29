@@ -1,5 +1,7 @@
 # notes-rag MCP 接入使用说明
 
+[English](MCP_GUIDE_EN.md) | 简体中文
+
 把你的个人知识库接入 AI 助手(Trae / WorkBuddy / OpenClaw 等),让 agent 直接**检索、读原文、问答**你的笔记 —— 不用切窗口、不用手动复制粘贴。
 
 ---

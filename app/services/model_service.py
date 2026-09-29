@@ -1,4 +1,4 @@
-"""业务·模型配置 — 多 LLM / 多 Embedding 的解析与选择（见 design.md §18）。
+"""业务·模型配置 — 多 LLM / 多 Embedding 的解析与选择（见 design.md §10 模块索引 M08）。
 
 能力：
 - 解析「本次请求用哪个模型」：显式 ref → 用户默认 → 首条 enabled（见 §18.3）
@@ -15,7 +15,7 @@
 - async def list_models / create_model / update_model / delete_model / set_default：CRUD 编排
 - async def test_connection(runtime) -> ModelTestResult
 
-关联方案：docs/design.md §18（多模型管理）、§7（RAG 管线）。
+关联方案：docs/design.md §10 模块索引 M08（多模型管理）。
 """
 import json
 import time

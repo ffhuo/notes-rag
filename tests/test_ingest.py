@@ -5,7 +5,7 @@
 - 调 POST /api/v1/ingest，断言返回的 scanned / indexed_chunks 合理
 - 断言向量库与 SQLite 元数据已写入
 
-关联方案：docs/design.md §11（测试策略）。
+关联方案：docs/design.md §9.1（测试与质量）。
 """
 
 
