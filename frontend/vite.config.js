@@ -11,6 +11,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': 'http://127.0.0.1:8000',
+      // 侧栏版本号从 GET /healthz 读取（生产环境与后端同源，无需代理）
+      '/healthz': 'http://127.0.0.1:8000',
     },
   },
   build: {

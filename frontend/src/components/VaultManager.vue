@@ -440,8 +440,15 @@ async function submitEdit() {
   try {
     await vaultsApi.update(v.id, { name, filters: filtersPayload(editForm.value.filters) })
     editOpen.value = false
-    toast.success('过滤设置已保存，下次「同步」时生效')
     await refresh()
+    if (v.source_type === 'uploaded') {
+      // 上传型卡片没有「同步」按钮（重扫看不到本机新文件），若不自动跑一次，
+      // 新排除规则与 prune 永远不会落到索引上 —— 这里代跑一次增量同步。
+      toast.success('已保存，正在同步生效')
+      await autoSubmit(v.id)
+      return
+    }
+    toast.success('过滤设置已保存，下次「同步」时生效')
   } catch (e) {
     actionError.value = e.message
   } finally {

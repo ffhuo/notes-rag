@@ -1,8 +1,8 @@
 """路由·健康检查 — GET /healthz。
 
 能力：
-- 探活，返回 {"status": "ok"}
-- 免鉴权（不依赖 get_current_api_key）
+- 探活，返回 {"status": "ok", "version": "<产品版本>"}
+- 免鉴权（不依赖 get_current_api_key）；版本号由前端侧栏读取并展示
 
 主要端点：
 - GET /healthz
@@ -11,10 +11,12 @@
 """
 from fastapi import APIRouter
 
+from app.core.config import settings
+
 router = APIRouter(tags=["health"])
 
 
 @router.get("/healthz")
 async def health() -> dict:
-    """健康检查，返回 {"status": "ok"}。"""
-    return {"status": "ok"}
+    """健康检查，返回 {"status": "ok", "version": "<产品版本>"}。"""
+    return {"status": "ok", "version": settings.version}
