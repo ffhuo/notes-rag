@@ -3,7 +3,7 @@
 //
 // 文案单一来源：label 取自对应路由的 meta.title（见 router.js 的 NAV_ITEMS），
 // 不在本组件重写一遍「知识库 / 任务与进度…」。
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { NAV_ITEMS } from '../router'
 import { authState, canLogout, logout } from '../auth'
@@ -25,6 +25,25 @@ const items = computed(() => NAV_ITEMS.map((n) => ({ ...n, active: route.name ==
 
 /** 当前身份名（多用户为账号名；单用户为合成身份 default）。 */
 const userName = computed(() => authState.user?.username || '当前用户')
+
+/**
+ * 产品版本号（如 v1.0）。
+ *
+ * 取自 GET /healthz 而非前端写死：版本是**当前运行中的服务**的属性，读服务端才能
+ * 反映「部署的到底是哪一版」（前端静态资源被缓存时，写死反而会骗人）。
+ * 请求失败就不显示，不为此弹错误打扰用户。
+ */
+const version = ref('')
+onMounted(async () => {
+  try {
+    const res = await fetch('/healthz')
+    if (!res.ok) return
+    const data = await res.json()
+    if (data?.version) version.value = `v${data.version}`
+  } catch {
+    /* 服务信息拿不到时静默降级：品牌照常显示 */
+  }
+})
 </script>
 
 <template>
@@ -36,6 +55,7 @@ const userName = computed(() => authState.user?.username || '当前用户')
       <RouterLink class="app-sidebar__brand" to="/vaults" @click="emit('close-mobile')">
         <span class="app-sidebar__logo">n</span>
         <span class="app-sidebar__brand-text">notes-rag</span>
+        <span v-if="version" class="app-sidebar__version" :title="`当前服务版本 ${version}`">{{ version }}</span>
       </RouterLink>
 
       <button
@@ -152,6 +172,18 @@ const userName = computed(() => authState.user?.username || '当前用户')
   white-space: nowrap;
   transition: opacity var(--duration-base) var(--ease-standard),
               transform var(--duration-base) var(--ease-standard);
+}
+
+/* 版本号胶囊：紧跟品牌名，弱化配色避免抢焦点 */
+.app-sidebar__version {
+  flex: none;
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  background: var(--color-bg-subtle);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-caption);
+  line-height: 18px;
+  white-space: nowrap;
 }
 
 .app-sidebar__collapse {
@@ -289,6 +321,7 @@ const userName = computed(() => authState.user?.username || '当前用户')
 }
 
 .is-collapsed .app-sidebar__brand-text,
+.is-collapsed .app-sidebar__version,
 .is-collapsed .app-sidebar__collapse {
   display: none;
 }

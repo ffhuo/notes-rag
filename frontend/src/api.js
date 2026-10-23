@@ -127,6 +127,13 @@ export const vaultsApi = {
     return apiFetch('/vaults/upload', { method: 'POST', body: fd })
   },
 
+  /** 重新上传 zip，整包替换 uploaded vault 的文件（服务端不自动索引，由调用方再提交 sync）。 */
+  replaceUpload: (id, file, filename = 'vault.zip') => {
+    const fd = new FormData()
+    fd.append('file', file, file.name || filename)
+    return apiFetch(`/vaults/${id}/upload`, { method: 'POST', body: fd })
+  },
+
   /**
    * 提交同步作业 → 202 { run_id, vault_id, status }。
    * 同 vault 已有作业在跑 → 409（**不排队**），err.status === 409 且

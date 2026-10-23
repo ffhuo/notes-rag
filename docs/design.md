@@ -247,6 +247,7 @@ POST /chat  { query, conversation_id?, top_k, vault_id?, llm_profile? }
 | GET | `/healthz` | 健康检查 | — |
 | GET / POST | `/api/v1/vaults` | 列出 / 新建 vault（JSON） | M06 |
 | POST | `/api/v1/vaults/upload` | 上传 vault（multipart `.zip`） | M06 |
+| POST | `/api/v1/vaults/{id}/upload` | **重新上传**（仅 `uploaded` 型，整包替换后需再提交 sync） | M06 |
 | GET / DELETE | `/api/v1/vaults/{id}` | 详情 / 删除（连带清索引与分块） | M06 |
 | POST | `/api/v1/vaults/{id}/sync` | **提交同步作业** → `202 { run_id }`；`dry_run` 可预览计划 | M03 §5.8–§5.10 |
 | POST | `/api/v1/vaults/{id}/reindex` | **提交全量重建作业** → `202`（换 embedding 带 `?embed_profile=`） | M06 / M08 |

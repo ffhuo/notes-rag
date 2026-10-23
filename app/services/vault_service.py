@@ -9,7 +9,8 @@
   - local：直接返回 source_value（绝对路径）
   - uploaded：返回 UPLOAD_DIR/<vault_id>（上传时解压到的目录）
   - git / remote：一期不做在线拉取，缓存目录存在则用，否则抛 SourceUnavailable
-- 接收上传的 vault 压缩包 → 解压到 UPLOAD_DIR/<vault_id>（防穿越 / 防炸弹）
+- 接收上传的 vault 压缩包 → 解压到 UPLOAD_DIR/<vault_id>（防穿越 / 防炸弹）；
+  重新上传走同一函数，整包替换（先解压到临时目录，成功后才换旧目录）
 - 提交同步作业（sync / rebuild 共用一条提交路径，差别只在 mode）
 
 **vault 状态回写不在本模块**：`vault.embed_profile_id` / `embed_indexed_profiles` 的语义是
@@ -26,6 +27,7 @@ import shutil
 import zipfile
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from loguru import logger
 
@@ -92,7 +94,11 @@ async def save_upload(vault_id: "int | str", file: Any, settings: Settings = def
     - 只处理 zip（按文件名 / 魔数）；非 zip 抛 ValueError
     - 路径穿越：拒绝解析后逃逸目标目录的条目（含绝对路径与 .. ）
     - 解压炸弹：条目数 ≤ _MAX_ZIP_ENTRIES、累计解压体积 ≤ _MAX_UNCOMPRESSED_BYTES
-    重复上传：先清空旧目录再解压（整包替换，保证与压缩包内容一致）。
+    重复上传：整包替换（与压缩包内容完全一致）。
+
+    替换是「先解压到临时目录 → 成功后再删旧目录并改名」：重新上传时若半途失败
+    （非法条目 / 炸弹 / 磁盘 IO），旧文件原样保留，不会出现「旧目录已清空、新包没解开」
+    这种既没旧数据也没新数据的空窗。
     """
     data = await file.read()
     name = getattr(file, "filename", "") or ""
@@ -100,23 +106,35 @@ async def save_upload(vault_id: "int | str", file: Any, settings: Settings = def
         raise ValueError(f"仅支持 .zip 压缩包：{name!r}")
 
     target = (Path(settings.upload_dir) / str(vault_id)).resolve()
-    if target.exists():
-        shutil.rmtree(target)
-    target.mkdir(parents=True, exist_ok=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # 临时目录与目标同父级（同一文件系统），改名才可能是原子的
+    staging = target.parent / f".{target.name}.uploading-{uuid4().hex}"
+    staging.mkdir()
+    try:
+        await asyncio.to_thread(_extract_zip, data, staging)
+        if target.exists():
+            await asyncio.to_thread(shutil.rmtree, target)
+        staging.rename(target)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
+    return target
+
+
+def _extract_zip(data: bytes, target: Path) -> None:
+    """把 zip 解压到已建好的 target；任何非法内容都抛 ValueError（由调用方清理临时目录）。"""
     target_resolved = target.resolve()
     total_bytes = 0
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         infos = zf.infolist()
         if len(infos) > _MAX_ZIP_ENTRIES:
-            shutil.rmtree(target, ignore_errors=True)
             raise ValueError(f"压缩包条目数超限（>{_MAX_ZIP_ENTRIES}）")
 
         for info in infos:
             # 穿越防护：规范化后必须仍在目标目录内
             member_path = (target / info.filename).resolve()
             if target_resolved not in member_path.parents and member_path != target_resolved:
-                shutil.rmtree(target, ignore_errors=True)
                 raise ValueError(f"压缩包含非法路径（疑似穿越）：{info.filename!r}")
 
             if info.is_dir():
@@ -125,14 +143,11 @@ async def save_upload(vault_id: "int | str", file: Any, settings: Settings = def
 
             total_bytes += info.file_size
             if total_bytes > _MAX_UNCOMPRESSED_BYTES:
-                shutil.rmtree(target, ignore_errors=True)
                 raise ValueError("压缩包解压后总体积超限（疑似解压炸弹）")
 
             member_path.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(info) as src, open(member_path, "wb") as dst:
                 shutil.copyfileobj(src, dst, length=1024 * 1024)
-
-    return target
 
 
 async def delete_upload_dir(vault: "Vault", settings: Settings = default_settings) -> None:

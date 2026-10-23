@@ -13,13 +13,15 @@
 // 建库：过滤随后的 PATCH 一并落库，不再有「上传完再点一次保存过滤」这一步。
 // 建库后随时可通过卡片上的「过滤设置」改（PATCH /vaults/{id}，改动下次同步生效）。
 //
-// 建库成功即**自动提交首个索引作业**并跳任务页（一个 vault 一次执行 = 一个任务）：
-// 用户不用再猜「建完了为什么没动静」。提交失败不回滚 vault（库已建好），提示手动点「同步」重试。
+// 建库 / 更新文件成功即**自动提交索引作业**并跳任务页（一个 vault 一次执行 = 一个任务）：
+// 用户不用再猜「建完了为什么没动静」。提交失败不回滚 vault（库已建好），提示按类型手动重试。
 //
 // 索引类按钮**不再同步等待**（后端一律 202，M03 §5.13）：
 //   · 同步      增量对账（日常用，通常数秒）
 //   · 预览变更  dry_run 作业，停在 stage=plan_ready，先在任务页看计划再决定
 //   · 重建索引  全量重算（换 embedding / 分块参数 / 索引疑似损坏时才用，分钟级）
+// 上传型 vault 例外：服务端只有上次解压的副本，重扫看不到本机新改的文件，
+// 卡片上对应的入口是「更新文件」（重新上传整包 → 自动增量同步，prune 清掉已删除文件）。
 // 提交后跳转 /tasks?run_id=…，让用户立刻看到进度，而不是盯着一个没有反馈的按钮。
 //
 // 作业数据来自公共件 useRunsPolling（与侧栏作业状态、Tasks 页共用一份请求）。
@@ -31,7 +33,7 @@ import { isTerminal, relativeTime } from '../jobs'
 import { setTopbarActions, clearTopbarActions } from '../shell'
 import { toast } from '../toast'
 import { PACK_LIMITS, formatBytes, summarize } from '../transport/zip'
-import { uploadVault } from '../transport/upload'
+import { updateVaultFiles, uploadVault } from '../transport/upload'
 import AppButton from './AppButton.vue'
 import AppCard from './AppCard.vue'
 import AppConfirm from './AppConfirm.vue'
@@ -74,6 +76,8 @@ const filterState = ref('')
 const addOpen = ref(false)
 const addSaving = ref(false)
 const addForm = ref({ type: 'local', name: '', path: '', filters: emptyFilters() })
+/** 非空表示当前弹窗是「更新已有 uploaded vault 的文件」，而不是新建。 */
+const uploadTarget = ref(null)
 /** 所选文件夹的文件列表（webkitdirectory 给的是 FileList，条目带 webkitRelativePath）。 */
 const folderFiles = ref(null)
 /** 打包进度，按文件数计；total=0 表示未开始。 */
@@ -243,7 +247,30 @@ const filtered = computed(
 /* ---------- 添加 ---------- */
 
 function openAdd(type = 'local') {
+  uploadTarget.value = null
   addForm.value = { type, name: '', path: '', filters: emptyFilters() }
+  folderFiles.value = null
+  packProgress.value = { done: 0, total: 0 }
+  packSummary.value = null
+  actionError.value = ''
+  addOpen.value = true
+}
+
+/**
+ * 更新「上传的文件夹」型 vault：重新选一次本机文件夹，整包替换服务端副本。
+ *
+ * 这类库的文件只存在于服务端解压副本里，用户改的是自己电脑上的原目录，
+ * 所以「同步」不可能感知新文件 —— 必须重新上传。作业运行中不让换文件
+ * （扫描途中换目录会得到自相矛盾的对账结果），与后端 409 同义，
+ * 这里提前拦下，省一次往返。过滤沿用库上已保存的配置，不在更新弹窗里改。
+ */
+function openUpdate(v) {
+  if (activeOf(v)) {
+    toast.info('该 vault 有作业在运行，请等它结束后再更新文件')
+    return
+  }
+  uploadTarget.value = v
+  addForm.value = { type: 'uploaded', name: v.name, path: '', filters: emptyFilters() }
   folderFiles.value = null
   packProgress.value = { done: 0, total: 0 }
   packSummary.value = null
@@ -273,10 +300,17 @@ const uploadLabel = computed(() => {
   return total ? `打包上传 ${done}/${total}` : '上传中…'
 })
 
+/** 弹窗标题：新建走添加/上传，更新则点名目标库。 */
+const addTitle = computed(() => {
+  if (uploadTarget.value) return `更新「${uploadTarget.value.name}」的文件`
+  return addForm.value.type === 'uploaded' ? '上传本机文件夹' : '添加服务器目录'
+})
+
 /** 主按钮文案：上传入口在打包期间显示进度，其余情况是固定动词。 */
 const primaryLabel = computed(() => {
   if (addForm.value.type !== 'uploaded') return '添加'
-  return addSaving.value ? uploadLabel.value : '上传'
+  if (addSaving.value) return uploadLabel.value
+  return uploadTarget.value ? '上传并同步' : '上传'
 })
 
 /** 大目录确认弹窗的正文。 */
@@ -353,14 +387,21 @@ async function doUpload() {
   addSaving.value = true
   actionError.value = ''
   packProgress.value = { done: 0, total: 0 }
+  const target = uploadTarget.value
+  const onProgress = (done, total) => {
+    packProgress.value = { done, total }
+  }
   try {
-    const vault = await uploadVault(
-      addForm.value.name.trim(),
-      folderFiles.value,
-      (done, total) => {
-        packProgress.value = { done, total }
-      },
-    )
+    if (target) {
+      // 更新：文件替换完再跑一次增量同步（prune 默认开启，新包删掉的文件会被清出索引）
+      await updateVaultFiles(target, folderFiles.value, onProgress)
+      addOpen.value = false
+      toast.success('文件已更新，正在同步索引')
+      await refresh()
+      await autoSubmit(target.id)
+      return
+    }
+    const vault = await uploadVault(addForm.value.name.trim(), folderFiles.value, onProgress)
     addOpen.value = false
     try {
       await vaultsApi.update(vault.id, { filters: filtersPayload(addForm.value.filters) })
@@ -399,8 +440,15 @@ async function submitEdit() {
   try {
     await vaultsApi.update(v.id, { name, filters: filtersPayload(editForm.value.filters) })
     editOpen.value = false
-    toast.success('过滤设置已保存，下次「同步」时生效')
     await refresh()
+    if (v.source_type === 'uploaded') {
+      // 上传型卡片没有「同步」按钮（重扫看不到本机新文件），若不自动跑一次，
+      // 新排除规则与 prune 永远不会落到索引上 —— 这里代跑一次增量同步。
+      toast.success('已保存，正在同步生效')
+      await autoSubmit(v.id)
+      return
+    }
+    toast.success('过滤设置已保存，下次「同步」时生效')
   } catch (e) {
     actionError.value = e.message
   } finally {
@@ -416,9 +464,9 @@ async function goTasks(vaultId, res) {
 }
 
 /**
- * 建库成功后的自动提交：发一次增量同步，再跳任务页看进度。
+ * 建库 / 更新文件后的自动提交：发一次增量同步，再跳任务页看进度。
  *
- * 提交失败**不回滚** vault（库已建好、上传文件已落盘），只提示可手动点「同步」重试；
+ * 提交失败**不回滚** vault（库已建好、上传文件已落盘），只提示可手动重试；
  * 409 说明该 vault 已有作业在跑 —— 跟随那一条，不重试（M06 ADR-8）。
  */
 async function autoSubmit(vaultId) {
@@ -430,7 +478,10 @@ async function autoSubmit(vaultId) {
       goTasks(vaultId, { run_id: e.detail.existing_run_id })
       return
     }
-    toast.warn(`vault 已创建，但首个索引作业未提交（${e.message}）；可在卡片上点「同步」重试`)
+    // 上传型库没有「同步」按钮（重扫看不到新文件），重试入口是「更新文件」
+    const v = vaults.value.find((item) => item.id === vaultId)
+    const retry = v?.source_type === 'uploaded' ? '「更新文件」' : '「同步」'
+    toast.warn(`索引作业未提交（${e.message}）；可在卡片上点${retry}重试`)
   }
 }
 
@@ -646,12 +697,25 @@ onUnmounted(clearTopbarActions)
 
         <template #footer>
           <span class="vaults__actions">
-            <AppButton variant="secondary" size="sm" icon="refresh" @click="submit(v.id, { mode: 'sync' })">
-              同步
+            <!-- 上传型库的文件只存在于服务端副本，重扫不会发现任何新内容 —— 入口必须是「重新上传」 -->
+            <AppButton
+              v-if="v.source_type === 'uploaded'"
+              variant="secondary"
+              size="sm"
+              icon="upload"
+              title="重新上传文件夹：整包替换服务端副本，并自动同步索引"
+              @click="openUpdate(v)"
+            >
+              更新文件
             </AppButton>
-            <AppButton variant="secondary" size="sm" @click="submit(v.id, { mode: 'sync', dry_run: true })">
-              预览变更
-            </AppButton>
+            <template v-else>
+              <AppButton variant="secondary" size="sm" icon="refresh" @click="submit(v.id, { mode: 'sync' })">
+                同步
+              </AppButton>
+              <AppButton variant="secondary" size="sm" @click="submit(v.id, { mode: 'sync', dry_run: true })">
+                预览变更
+              </AppButton>
+            </template>
             <AppButton variant="secondary" size="sm" icon="zap" @click="reindex(v.id)">
               重建索引
             </AppButton>
@@ -674,15 +738,23 @@ onUnmounted(clearTopbarActions)
       </AppCard>
     </div>
 
-    <!-- 添加 / 上传（同一张表单，来源类型由入口决定，弹窗内不再选） -->
+    <!-- 添加 / 上传 / 更新（同一张表单，来源类型由入口决定，弹窗内不再选） -->
     <!-- 宽度 880：过滤区含目录树与规则标签，窄于此规则会挤成多行 -->
-    <AppModal
-      v-model="addOpen"
-      :title="addForm.type === 'uploaded' ? '上传本机文件夹' : '添加服务器目录'"
-      :width="880"
-    >
+    <AppModal v-model="addOpen" :title="addTitle" :width="880">
       <div class="vaults__form">
-        <AppInput v-model="addForm.name" label="名称" required placeholder="例如 notes" />
+        <AppInput
+          v-if="!uploadTarget"
+          v-model="addForm.name"
+          label="名称"
+          required
+          placeholder="例如 notes"
+        />
+        <p v-else class="vaults__section">
+          {{ uploadTarget.name }}
+          <span class="vaults__section-hint">
+            整包替换：新文件夹会覆盖服务端现有文件，已删除的文件在同步后从索引移除
+          </span>
+        </p>
 
         <AppInput
           v-if="addForm.type === 'local'"
@@ -716,22 +788,25 @@ onUnmounted(clearTopbarActions)
           @change="onFolder"
         />
 
-        <!-- 文件过滤：服务器目录填好路径即可配；上传选好文件夹即可（本地树，不必等解压） -->
-        <p class="vaults__section">
-          文件过滤
-          <span class="vaults__section-hint">
-            {{
-              addForm.type === 'uploaded' && !hasFolder
-                ? '已默认排除 Obsidian 相关目录；选好文件夹后即可在这里浏览它的目录并勾选要排除的'
-                : '已默认排除 Obsidian 相关目录；排除之外的文件都会索引（服务端默认收 md / txt）'
-            }}
-          </span>
-        </p>
-        <VaultFilters
-          v-model="addForm.filters"
-          :root="addFiltersRoot"
-          :local-dirs="addLocalDirs"
-        />
+        <!-- 文件过滤：服务器目录填好路径即可配；上传选好文件夹即可（本地树，不必等解压）。
+             更新连的是已有库，过滤沿用原配置，不在这里改（要改走卡片上的「过滤设置」）。 -->
+        <template v-if="!uploadTarget">
+          <p class="vaults__section">
+            文件过滤
+            <span class="vaults__section-hint">
+              {{
+                addForm.type === 'uploaded' && !hasFolder
+                  ? '已默认排除 Obsidian 相关目录；选好文件夹后即可在这里浏览它的目录并勾选要排除的'
+                  : '已默认排除 Obsidian 相关目录；排除之外的文件都会索引（服务端默认收 md / txt）'
+              }}
+            </span>
+          </p>
+          <VaultFilters
+            v-model="addForm.filters"
+            :root="addFiltersRoot"
+            :local-dirs="addLocalDirs"
+          />
+        </template>
 
         <p v-if="actionError" class="vaults__form-error">{{ actionError }}</p>
       </div>

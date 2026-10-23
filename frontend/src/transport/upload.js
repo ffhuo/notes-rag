@@ -23,6 +23,24 @@ export async function uploadVault(name, files, onProgress) {
   return vaultsApi.upload(name, blob, `${safe}.zip`)
 }
 
+/**
+ * 重新上传文件，整包替换已有 uploaded vault 的内容。
+ *
+ * 与 uploadVault 的区别只在目标端点：这里是「更新已有库」，不新建实体，
+ * 因此不需要 name。上传成功后调用方仍需提交一次 sync 才能让索引跟上。
+ *
+ * @param {{id: number, name: string}} vault 目标 vault
+ * @param {FileList|File[]} files `<input type="file" webkitdirectory>` 的选择结果
+ * @param {(done: number, total: number) => void} [onProgress] 打包进度（按文件数）
+ * @returns {Promise<object>} 后端响应体（VaultOut）
+ */
+export async function updateVaultFiles(vault, files, onProgress) {
+  const blob = await packFolder(files, onProgress)
+  const safe = String(vault?.name || `vault-${vault?.id}`).replace(/[\\/:*?"<>|]/g, '_')
+  return vaultsApi.replaceUpload(vault.id, blob, `${safe}.zip`)
+}
+
 export const uploadTransport = {
   uploadVault,
+  updateVaultFiles,
 }

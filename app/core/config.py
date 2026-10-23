@@ -40,7 +40,8 @@ StrList = Annotated[List[str], NoDecode]
 class Settings(BaseSettings):
     # ===== 环境变量配置 =====
     DEBUG: bool = False
-    version: str = "0.1.0"
+    # 产品版本号：FastAPI / MCP 的 server version 与前端侧栏展示共用这一处
+    version: str = "1.0"
 
     # ===== 摄取过滤（多格式 / 文件夹过滤，见 docs/design.md §16）=====
     # Word(.docx) / PDF / Excel(.xlsx) 均为主依赖，默认启用（.xlsm 可按需显式加入）

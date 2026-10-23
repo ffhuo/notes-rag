@@ -1,7 +1,7 @@
 {
   "name": "notes-rag-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0",
   "type": "module",
   "description": "notes-rag 前端：Vault 管理 / 检索 / 问答 SPA（Vue 3 + Vite）。构建产物输出到 ../app/static，由后端 FastAPI 托管。",
   "scripts": {

@@ -247,6 +247,7 @@ The frontend reads the stream with `fetch` (`EventSource` cannot send auth heade
 | GET | `/healthz` | Health check | — |
 | GET / POST | `/api/v1/vaults` | List / create vault (JSON) | M06 |
 | POST | `/api/v1/vaults/upload` | Upload vault (multipart `.zip`) | M06 |
+| POST | `/api/v1/vaults/{id}/upload` | **Re-upload** (`uploaded` only; replaces all files, then submit sync) | M06 |
 | GET / DELETE | `/api/v1/vaults/{id}` | Detail / delete (also clears index and chunks) | M06 |
 | POST | `/api/v1/vaults/{id}/sync` | **Submit sync job** → `202 { run_id }`; `dry_run` previews the plan | M03 §5.8–§5.10 |
 | POST | `/api/v1/vaults/{id}/reindex` | **Submit full rebuild job** → `202` (with `?embed_profile=` to switch embedding) | M06 / M08 |

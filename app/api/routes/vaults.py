@@ -364,6 +364,51 @@ async def upload_vault(
     return _vault_out(vault)
 
 
+@router.post("/{vault_id}/upload", response_model=VaultOut)
+async def replace_upload(
+    vault_id: int,
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    """重新上传 zip，整包替换「上传的文件夹」型 vault 的文件（不自动索引）。
+
+    只有 uploaded 类型可替换：local 指向用户自己的目录，git/remote 是缓存目录，
+    服务端能做的只是重扫已有内容 —— 真正的「更新文件」只能由用户重新上传。
+
+    有作业在跑 → 409：作业正在扫描该目录，中途换文件会得到自相矛盾的对账结果。
+    替换成功后由前端提交一次增量同步（prune 默认开启，删掉的文件会被清出索引）。
+    """
+    vault = await _get_vault_or_404(session, vault_id, user_id)
+    if vault.source_type != "uploaded":
+        raise HTTPException(status_code=400, detail="仅「上传的文件夹」类型支持更新文件")
+
+    active = await sync_repo.find_active_run(session, vault.id)
+    if active is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "existing_run_id": active.id,
+                "status": active.status,
+                "message": "该 vault 有作业进行中，请先取消并等待其结束后再更新文件",
+            },
+        )
+
+    try:
+        target = await vault_service.save_upload(vault.id, file, settings)
+    except ValueError as e:
+        # 包非法 / 穿越 / 炸弹：临时目录已清理，旧文件原样保留
+        raise HTTPException(status_code=400, detail=str(e))
+
+    vault.source_value = str(target)
+    await session.commit()
+    await session.refresh(vault)
+
+    logger.info("uploaded vault 文件已更新", vault_id=vault.id, path=str(target), user_id=user_id)
+    return _vault_out(vault)
+
+
 @router.get("/browse", response_model=VaultBrowseOut)
 async def browse_dirs(
     path: str = Query(..., description="要浏览的根目录绝对路径（通常是 vault 的本地目录）"),
