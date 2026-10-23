@@ -19,6 +19,7 @@ const pageTitle = computed(() => route.meta?.title || 'notes-rag')
 /* ---------- 折叠状态：持久化 + md 断点默认折叠（规范 §3.2） ---------- */
 const SIDEBAR_KEY = 'nr_sidebar_collapsed'
 const MD_MAX_WIDTH = 1023 // ≤1023px 视为 md 及以下：侧栏默认收成 64px 图标条
+const DRAWER_MAX_WIDTH = 767 // ≤767px 侧栏变成抽屉（与 AppSidebar 的媒体查询一致）
 
 function readStored() {
   try {
@@ -33,6 +34,8 @@ const hasPreference = ref(stored === '0' || stored === '1')
 const collapsed = ref(
   hasPreference.value ? stored === '1' : typeof window !== 'undefined' && window.innerWidth <= MD_MAX_WIDTH,
 )
+/** 是否处于抽屉断点（决定汉堡按钮是开抽屉还是展开侧栏）。 */
+const isDrawer = ref(typeof window !== 'undefined' && window.innerWidth <= DRAWER_MAX_WIDTH)
 
 const mobileOpen = ref(false)
 
@@ -48,8 +51,20 @@ function toggleCollapse() {
 
 /** 未手动设置过时，跟随断点：窄屏自动折叠，宽屏自动展开。 */
 function onResize() {
+  isDrawer.value = window.innerWidth <= DRAWER_MAX_WIDTH
   if (hasPreference.value) return
   collapsed.value = window.innerWidth <= MD_MAX_WIDTH
+}
+
+/**
+ * 顶栏汉堡按钮：窄屏开抽屉，桌面端折叠态用来展开侧栏。
+ *
+ * 桌面端折叠后侧栏只有 64px，放不下「logo + 展开按钮」，原实现把按钮整个藏了，
+ * 导致折叠后没有任何入口能恢复 —— 这里用顶栏按钮兜住。
+ */
+function openNav() {
+  if (isDrawer.value) mobileOpen.value = true
+  else toggleCollapse()
 }
 
 onMounted(() => {
@@ -95,11 +110,14 @@ watch(
 
     <div class="app-main">
       <header class="app-topbar">
+        <!-- 窄屏：开抽屉；桌面折叠态：展开侧栏（否则折叠后无入口恢复） -->
         <button
+          v-if="isDrawer || collapsed"
           type="button"
           class="app-topbar__hamburger"
-          aria-label="打开导航"
-          @click="mobileOpen = true"
+          :aria-label="isDrawer ? '打开导航' : '展开侧栏'"
+          :title="isDrawer ? '打开导航' : '展开侧栏'"
+          @click="openNav"
         >
           <AppIcon name="menu" :size="24" />
         </button>
@@ -172,9 +190,9 @@ watch(
   border-bottom: var(--border-width) solid var(--color-border);
 }
 
-/* 汉堡仅在 sm 断点出现（规范 §3.2） */
+/* 汉堡：窄屏常驻；桌面端仅在侧栏折叠时出现（见模板 v-if） */
 .app-topbar__hamburger {
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: center;
   flex: none;
@@ -223,9 +241,6 @@ watch(
 @media (max-width: 767px) {
   .app-topbar {
     padding: 0 var(--space-4);
-  }
-  .app-topbar__hamburger {
-    display: flex;
   }
   .app-shell__sidebar-holder {
     display: none;
