@@ -15,10 +15,11 @@ import { packFolder } from './zip'
  * @param {string} name vault 名称
  * @param {FileList|File[]} files `<input type="file" webkitdirectory>` 的选择结果
  * @param {(done: number, total: number) => void} [onProgress] 打包进度（按文件数）
+ * @param {{exclude?: string|string[]}} [filters] 排除规则，命中项不打包（与索引用同一份清单）
  * @returns {Promise<object>} 后端 201 响应体（VaultOut）
  */
-export async function uploadVault(name, files, onProgress) {
-  const blob = await packFolder(files, onProgress)
+export async function uploadVault(name, files, onProgress, filters) {
+  const blob = await packFolder(files, onProgress, filters)
   const safe = String(name || 'vault').replace(/[\\/:*?"<>|]/g, '_')
   return vaultsApi.upload(name, blob, `${safe}.zip`)
 }
@@ -32,10 +33,11 @@ export async function uploadVault(name, files, onProgress) {
  * @param {{id: number, name: string}} vault 目标 vault
  * @param {FileList|File[]} files `<input type="file" webkitdirectory>` 的选择结果
  * @param {(done: number, total: number) => void} [onProgress] 打包进度（按文件数）
+ * @param {{exclude?: string|string[]}} [filters] 排除规则，命中项不打包（与新建上传同一套逻辑）
  * @returns {Promise<object>} 后端响应体（VaultOut）
  */
-export async function updateVaultFiles(vault, files, onProgress) {
-  const blob = await packFolder(files, onProgress)
+export async function updateVaultFiles(vault, files, onProgress, filters) {
+  const blob = await packFolder(files, onProgress, filters)
   const safe = String(vault?.name || `vault-${vault?.id}`).replace(/[\\/:*?"<>|]/g, '_')
   return vaultsApi.replaceUpload(vault.id, blob, `${safe}.zip`)
 }
