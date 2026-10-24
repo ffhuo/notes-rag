@@ -262,7 +262,10 @@ function openAdd(type = 'local') {
  * 这类库的文件只存在于服务端解压副本里，用户改的是自己电脑上的原目录，
  * 所以「同步」不可能感知新文件 —— 必须重新上传。作业运行中不让换文件
  * （扫描途中换目录会得到自相矛盾的对账结果），与后端 409 同义，
- * 这里提前拦下，省一次往返。过滤沿用库上已保存的配置，不在更新弹窗里改。
+ * 这里提前拦下，省一次往返。
+ *
+ * 流程与新建上传完全一致：选文件夹 → 调过滤（预填库上已保存的规则）→ 打包上传。
+ * 被排除的目录/文件在打包阶段就被剔除，不会上传。
  */
 function openUpdate(v) {
   if (activeOf(v)) {
@@ -270,7 +273,8 @@ function openUpdate(v) {
     return
   }
   uploadTarget.value = v
-  addForm.value = { type: 'uploaded', name: v.name, path: '', filters: emptyFilters() }
+  // 预填库上已保存的规则：更新与新建用同一张表单，改完随文件一起保存
+  addForm.value = { type: 'uploaded', name: v.name, path: '', filters: filtersFromVault(v) }
   folderFiles.value = null
   packProgress.value = { done: 0, total: 0 }
   packSummary.value = null
@@ -290,8 +294,8 @@ function onFolder(event) {
 /** 已选文件夹的摘要（带体积 —— 用户据此判断有没有误选到上级大目录）。 */
 const folderLabel = computed(() => {
   if (!folderFiles.value?.length) return '未选择文件夹'
-  const s = summarize(folderFiles.value)
-  return `${s.count} 个文件 · ${formatBytes(s.bytes)}`
+  const s = summarize(folderFiles.value, addForm.value.filters)
+  return `待上传 ${s.count} 个文件 · ${formatBytes(s.bytes)}`
 })
 
 /** 打包中动态显示进度，长目录看起来才不像卡死。 */
@@ -317,7 +321,7 @@ const primaryLabel = computed(() => {
 const packSummaryText = computed(() => {
   const s = packSummary.value
   if (!s) return ''
-  return `所选文件夹含 ${s.count} 个文件、约 ${formatBytes(s.bytes)}，需要先在你电脑上压缩再上传，可能要等一会儿。`
+  return `待上传 ${s.count} 个文件、约 ${formatBytes(s.bytes)}（已按过滤规则剔除），需要先在你电脑上压缩再上传，可能要等一会儿。`
 })
 
 async function submitAdd() {
@@ -361,7 +365,7 @@ async function startUpload() {
     actionError.value = '请选择要上传的文件夹'
     return
   }
-  const s = summarize(folderFiles.value)
+  const s = summarize(folderFiles.value, addForm.value.filters)
   if (!s.count) {
     actionError.value = '所选文件夹里没有可上传的文件'
     return
@@ -393,15 +397,25 @@ async function doUpload() {
   }
   try {
     if (target) {
-      // 更新：文件替换完再跑一次增量同步（prune 默认开启，新包删掉的文件会被清出索引）
-      await updateVaultFiles(target, folderFiles.value, onProgress)
+      // 更新：先整包替换（排除规则在打包阶段就生效），再落过滤，最后跑增量同步
+      // （prune 默认开启，新包删掉的文件会被清出索引）
+      await updateVaultFiles(target, folderFiles.value, onProgress, addForm.value.filters)
       addOpen.value = false
-      toast.success('文件已更新，正在同步索引')
+      try {
+        // 过滤随更新一起保存：用户在弹窗里改的规则要与本次上传的内容一致，
+        // 否则打包剔除了 A 而库上仍是旧规则，下次同步会把 A 又扫回来
+        await vaultsApi.update(target.id, { filters: filtersPayload(addForm.value.filters) })
+        toast.success('文件已更新，正在同步索引')
+      } catch (e) {
+        toast.warn(`文件已更新，但过滤未保存（${e.message}）；可在卡片上的「过滤设置」重配`)
+      }
       await refresh()
       await autoSubmit(target.id)
       return
     }
-    const vault = await uploadVault(addForm.value.name.trim(), folderFiles.value, onProgress)
+    const vault = await uploadVault(
+      addForm.value.name.trim(), folderFiles.value, onProgress, addForm.value.filters,
+    )
     addOpen.value = false
     try {
       await vaultsApi.update(vault.id, { filters: filtersPayload(addForm.value.filters) })
@@ -788,25 +802,23 @@ onUnmounted(clearTopbarActions)
           @change="onFolder"
         />
 
-        <!-- 文件过滤：服务器目录填好路径即可配；上传选好文件夹即可（本地树，不必等解压）。
-             更新连的是已有库，过滤沿用原配置，不在这里改（要改走卡片上的「过滤设置」）。 -->
-        <template v-if="!uploadTarget">
-          <p class="vaults__section">
-            文件过滤
-            <span class="vaults__section-hint">
-              {{
-                addForm.type === 'uploaded' && !hasFolder
-                  ? '已默认排除 Obsidian 相关目录；选好文件夹后即可在这里浏览它的目录并勾选要排除的'
-                  : '已默认排除 Obsidian 相关目录；排除之外的文件都会索引（服务端默认收 md / txt）'
-              }}
-            </span>
-          </p>
-          <VaultFilters
-            v-model="addForm.filters"
-            :root="addFiltersRoot"
-            :local-dirs="addLocalDirs"
-          />
-        </template>
+        <!-- 文件过滤：服务器目录填好路径即可配；上传/更新选好文件夹即可（本地树，不必等解压）。
+             更新与新建共用同一张表单：规则预填库上已保存的配置，改完随文件一起保存。 -->
+        <p class="vaults__section">
+          文件过滤
+          <span class="vaults__section-hint">
+            {{
+              addForm.type === 'uploaded' && !hasFolder
+                ? '已默认排除 Obsidian 相关目录；选好文件夹后即可在这里浏览它的目录并勾选要排除的'
+                : '已默认排除 Obsidian 相关目录；排除之外的文件都会索引（服务端默认收 md / txt）'
+            }}
+          </span>
+        </p>
+        <VaultFilters
+          v-model="addForm.filters"
+          :root="addFiltersRoot"
+          :local-dirs="addLocalDirs"
+        />
 
         <p v-if="actionError" class="vaults__form-error">{{ actionError }}</p>
       </div>
