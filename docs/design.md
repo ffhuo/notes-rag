@@ -331,7 +331,7 @@ sync_runs(id PK, user_id, vault_id, trigger, mode, dry_run,
 
 | 分组 | 字段 |
 |---|---|
-| 运行 | `DEBUG`、`VERSION` |
+| 运行 | `DEBUG`（版本号不在 `.env` 中：唯一真相源为 `pyproject.toml` 的 `project.version`，无源码产物时用 `APP_VERSION` 覆盖） |
 | 摄取过滤 | `INGEST_EXTS`（默认 `md,txt,docx,pdf`）、`INGEST_EXCLUDE_DIRS`（默认排除 `node_modules` / `.git` / `.obsidian` / `.trash` / `__pycache__` / `.venv`） |
 | 变更管理 | `INGEST_SYNC_INTERVAL`（定时同步秒数，0=关）、`INGEST_SYNC_ON_STARTUP`、`INGEST_SETTLE_SECONDS`、`INGEST_MAX_CONCURRENCY`、`PRUNE_ENABLED`、`PRUNE_RATIO_LIMIT`（默认 0.5）、`SYNC_RUNS_KEEP`（默认 50）、`PROGRESS_FLUSH_MS`（进度落库最小间隔，默认 500；阶段跳变与终态强制写）、`WATCH_ENABLED`、`WATCH_DEBOUNCE_MS`、`MAX_FILE_SIZE`（详见 M03 §8 / M01 §5.2） |
 | 存储 | `CHROMA_DIR`、`SQLITE_PATH` |

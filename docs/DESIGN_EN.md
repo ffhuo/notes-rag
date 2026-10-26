@@ -333,7 +333,7 @@ or `POST /api/v1/models` (§10 module index M08). With an empty table, chat / in
 
 | Group | Fields |
 |---|---|
-| Runtime | `DEBUG`, `VERSION` |
+| Runtime | `DEBUG` (the version is not configured in `.env`: the single source of truth is `project.version` in `pyproject.toml`; use `APP_VERSION` to override when no source tree is available) |
 | Ingestion filters | `INGEST_EXTS` (default `md,txt,docx,pdf`), `INGEST_EXCLUDE_DIRS` (default excludes `node_modules` / `.git` / `.obsidian` / `.trash` / `__pycache__` / `.venv`) |
 | Change management | `INGEST_SYNC_INTERVAL` (scheduled sync seconds, 0=off), `INGEST_SYNC_ON_STARTUP`, `INGEST_SETTLE_SECONDS`, `INGEST_MAX_CONCURRENCY`, `PRUNE_ENABLED`, `PRUNE_RATIO_LIMIT` (default 0.5), `SYNC_RUNS_KEEP` (default 50), `PROGRESS_FLUSH_MS` (min progress-write interval, default 500; stage jumps and terminal states force writes), `WATCH_ENABLED`, `WATCH_DEBOUNCE_MS`, `MAX_FILE_SIZE` (see M03 §8 / M01 §5.2) |
 | Storage | `CHROMA_DIR`, `SQLITE_PATH` |

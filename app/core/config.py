@@ -28,6 +28,8 @@
 from typing import Annotated, Any, List
 
 import json
+import tomllib
+from pathlib import Path
 
 from pydantic import Field, field_validator
 
@@ -37,11 +39,30 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 StrList = Annotated[List[str], NoDecode]
 
 
+def _resolve_version() -> str:
+    """项目版本号：以 pyproject.toml 为唯一真相源。
+
+    为什么不用 importlib.metadata：本项目 [tool.uv] package = false，不会被安装成包，
+    元数据里查不到自身版本。构建产物（wheel / 单文件）中若没有 pyproject.toml，
+    由 APP_VERSION 环境变量兜底（见 version 字段的 validation_alias）。
+
+    路径按 __file__ 推导，与启动时的工作目录无关。
+    """
+    root = Path(__file__).resolve().parents[2]   # app/core/config.py → 项目根
+    try:
+        with (root / "pyproject.toml").open("rb") as fp:
+            return str(tomllib.load(fp)["project"]["version"])
+    except (OSError, KeyError, tomllib.TOMLDecodeError):
+        return "0.0.0+unknown"
+
+
 class Settings(BaseSettings):
     # ===== 环境变量配置 =====
     DEBUG: bool = False
-    # 产品版本号：FastAPI / MCP 的 server version 与前端侧栏展示共用这一处
-    version: str = "1.0"
+    # 产品版本号：FastAPI / MCP 的 server version 与前端侧栏展示共用这一处。
+    # 真相源是 pyproject.toml；无源码产物（wheel / 单文件）用 APP_VERSION 覆盖。
+    # 显式指定 validation_alias，避免 .env 里残留的 VERSION 再次覆盖代码里的版本。
+    version: str = Field(default_factory=_resolve_version, validation_alias="APP_VERSION")
 
     # ===== 摄取过滤（多格式 / 文件夹过滤，见 docs/design.md §16）=====
     # Word(.docx) / PDF / Excel(.xlsx) 均为主依赖，默认启用（.xlsm 可按需显式加入）

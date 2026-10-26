@@ -18,7 +18,10 @@ endif
 
 # make ingest 的传参变量（拼进 API 请求体，非应用配置项；vault 配置见 .env.example 说明）
 IMAGE ?= notes-rag
-TAG ?= latest
+# 镜像 tag 默认取 pyproject.toml 的 project.version（版本唯一真相源；发版只改那一处）。
+# 命令行传 TAG=xxx 仍可覆盖；读不到时回退 latest，避免出现 `notes-rag:` 这种非法镜像名。
+PROJECT_VERSION := $(shell sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' $(CURDIR)/pyproject.toml)
+TAG ?= $(if $(strip $(PROJECT_VERSION)),$(strip $(PROJECT_VERSION)),latest)
 
 .PHONY: help install sync dev run test init-db ingest clean shell \
         frontend-install frontend-dev frontend-build frontend-check frontend-tokens demo \
