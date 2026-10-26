@@ -264,8 +264,9 @@ function openAdd(type = 'local') {
  * （扫描途中换目录会得到自相矛盾的对账结果），与后端 409 同义，
  * 这里提前拦下，省一次往返。
  *
- * 流程与新建上传完全一致：选文件夹 → 调过滤（预填库上已保存的规则）→ 打包上传。
- * 被排除的目录/文件在打包阶段就被剔除，不会上传。
+ * 流程与新建上传完全一致：选文件夹 → 配过滤 → 打包上传，名称只读不可改。
+ * 过滤只作用于本次压缩（预填库上已保存规则作为起点），命中项在打包阶段就被剔除，
+ * 且**不写回**库上配置。
  */
 function openUpdate(v) {
   if (activeOf(v)) {
@@ -273,7 +274,7 @@ function openUpdate(v) {
     return
   }
   uploadTarget.value = v
-  // 预填库上已保存的规则：更新与新建用同一张表单，改完随文件一起保存
+  // 预填库上已保存的规则：与新建共用同一张表单，用户可在此基础上临时增删
   addForm.value = { type: 'uploaded', name: v.name, path: '', filters: filtersFromVault(v) }
   folderFiles.value = null
   packProgress.value = { done: 0, total: 0 }
@@ -379,12 +380,13 @@ async function startUpload() {
 }
 
 /**
- * 压缩 + 上传 + 落过滤：一次点击建库完成。
+ * 压缩 + 上传（新建时再落过滤）：一次点击完成。
  *
- * 过滤在上传前就在本地目录树里配好了，所以上传成功后顺手把过滤 PATCH 上去，
+ * 新建：过滤在上传前就在本地目录树里配好了，所以上传成功后顺手把过滤 PATCH 上去，
  * 不再要用户点第二次「保存过滤」。上传端点只认 name + zip（要先解压拿到 id 才能落库），
  * 这一步没法省；但两步失败要分清：PATCH 挂了不代表库没建成，提示去卡片重配即可。
- * 最后自动提交首个索引作业并跳任务页（见 autoSubmit）。
+ * 更新：过滤只作用于本次压缩，不写回库上配置。
+ * 最后自动提交索引作业并跳任务页（见 autoSubmit）。
  */
 async function doUpload() {
   packConfirmOpen.value = false
@@ -397,18 +399,10 @@ async function doUpload() {
   }
   try {
     if (target) {
-      // 更新：先整包替换（排除规则在打包阶段就生效），再落过滤，最后跑增量同步
-      // （prune 默认开启，新包删掉的文件会被清出索引）
+      // 更新：过滤只作用于本次压缩，不回写库上配置（用户明确要求），因此这里只打包 + 替换
       await updateVaultFiles(target, folderFiles.value, onProgress, addForm.value.filters)
       addOpen.value = false
-      try {
-        // 过滤随更新一起保存：用户在弹窗里改的规则要与本次上传的内容一致，
-        // 否则打包剔除了 A 而库上仍是旧规则，下次同步会把 A 又扫回来
-        await vaultsApi.update(target.id, { filters: filtersPayload(addForm.value.filters) })
-        toast.success('文件已更新，正在同步索引')
-      } catch (e) {
-        toast.warn(`文件已更新，但过滤未保存（${e.message}）；可在卡片上的「过滤设置」重配`)
-      }
+      toast.success('文件已更新，正在同步索引')
       await refresh()
       await autoSubmit(target.id)
       return
@@ -757,14 +751,14 @@ onUnmounted(clearTopbarActions)
     <AppModal v-model="addOpen" :title="addTitle" :width="880">
       <div class="vaults__form">
         <AppInput
-          v-if="!uploadTarget"
           v-model="addForm.name"
           label="名称"
           required
+          :disabled="!!uploadTarget"
+          :hint="uploadTarget ? '更新时名称不可修改' : ''"
           placeholder="例如 notes"
         />
-        <p v-else class="vaults__section">
-          {{ uploadTarget.name }}
+        <p v-if="uploadTarget" class="vaults__section">
           <span class="vaults__section-hint">
             整包替换：新文件夹会覆盖服务端现有文件，已删除的文件在同步后从索引移除
           </span>
@@ -783,7 +777,7 @@ onUnmounted(clearTopbarActions)
           v-else
           label="待上传的文件夹"
           required
-          hint="选的是你电脑上的文件夹，会自动压缩后上传，不必自己先打包"
+          hint="选的是你电脑上的文件夹，会自动压缩后上传，不必自己先打包；`. 开头`的目录服务端不扫描，打包时会自动剔除（`. 开头`的文件照常上传）"
         >
           <span class="vaults__file">
             <AppButton variant="secondary" icon="upload" :disabled="addSaving" @click="pickFolder">
@@ -803,14 +797,16 @@ onUnmounted(clearTopbarActions)
         />
 
         <!-- 文件过滤：服务器目录填好路径即可配；上传/更新选好文件夹即可（本地树，不必等解压）。
-             更新与新建共用同一张表单：规则预填库上已保存的配置，改完随文件一起保存。 -->
+             过滤只作用于**本次打包**：命中项不进 zip。更新时规则不写回库上配置。 -->
         <p class="vaults__section">
           文件过滤
           <span class="vaults__section-hint">
             {{
-              addForm.type === 'uploaded' && !hasFolder
-                ? '已默认排除 Obsidian 相关目录；选好文件夹后即可在这里浏览它的目录并勾选要排除的'
-                : '已默认排除 Obsidian 相关目录；排除之外的文件都会索引（服务端默认收 md / txt）'
+              uploadTarget
+                ? '仅对本次压缩生效，不会保存到知识库；已预填库上原有规则，可随本次上传临时调整'
+                : addForm.type === 'uploaded' && !hasFolder
+                  ? '已默认排除 Obsidian 相关目录；选好文件夹后即可在这里浏览它的目录并勾选要排除的'
+                  : '已默认排除 Obsidian 相关目录；排除之外的文件都会索引（服务端默认收 md / txt）'
             }}
           </span>
         </p>
