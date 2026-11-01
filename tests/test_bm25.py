@@ -13,8 +13,91 @@ from app.repositories.note_repo import ChunkRecord
 def test_chinese_query_is_tokenized_into_fts_terms():
     assert tokenize("如何提升检索准确度") == ["如何", "提升", "检索", "准确度"]
     assert build_fts_query("如何提升检索准确度") == (
-        '"如何" OR "提升" OR "检索" OR "准确度"'
+        '"提升" OR "检索" OR "准确度"'
     )
+
+
+def test_query_excludes_common_chinese_terms_from_bm25():
+    assert build_fts_query("RRF是什么，怎么用？") == '"rrf"'
+    assert build_fts_query("是什么，怎么用？") is None
+    assert build_fts_query("What is RRF and how to use it?") == '"rrf"'
+
+
+async def test_bm25_does_not_match_irrelevant_chunk_on_common_query_terms(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'query-noise.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+        await ensure_index(connection)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        vault = Vault(
+            user_id="user-a",
+            name="Research",
+            source_type="local",
+            source_value="/notes",
+        )
+        session.add(vault)
+        await session.commit()
+        await session.refresh(vault)
+
+        unrelated_note = Note(
+            user_id="user-a",
+            vault_id=vault.id,
+            file_path="areaAI-Engineering/03_LangGraph架构与流程控制.md",
+            title="LangGraph 架构与流程控制 > LangGraph 是什么？典型适用场景",
+            size_bytes=100,
+            mtime_ns=1,
+            content_hash="unrelated",
+        )
+        relevant_note = Note(
+            user_id="user-a",
+            vault_id=vault.id,
+            file_path="rag/rrf.md",
+            title="RRF 融合排序",
+            size_bytes=100,
+            mtime_ns=1,
+            content_hash="relevant",
+        )
+        session.add_all([unrelated_note, relevant_note])
+        await session.commit()
+        await session.refresh(unrelated_note)
+        await session.refresh(relevant_note)
+        await note_repo.replace_chunks(
+            session,
+            unrelated_note.id,
+            [
+                ChunkRecord(
+                    user_id="user-a",
+                    vault_id=vault.id,
+                    idx=0,
+                    content="Agent 推理循环需要反复思考行动观察，人机协作、多 Agent 协作、工作流编排。",
+                    char_start=0,
+                    char_end=40,
+                    vector_id="unrelated",
+                )
+            ],
+        )
+        await note_repo.replace_chunks(
+            session,
+            relevant_note.id,
+            [
+                ChunkRecord(
+                    user_id="user-a",
+                    vault_id=vault.id,
+                    idx=0,
+                    content="RRF 是 Reciprocal Rank Fusion，用于合并多个检索排名。",
+                    char_start=0,
+                    char_end=30,
+                    vector_id="relevant",
+                )
+            ],
+        )
+
+        hits = await bm25_repo.search(session, "RRF是什么，怎么用？", vault.id, 10)
+
+    assert [hit.vector_id for hit in hits] == ["relevant"]
+    await engine.dispose()
 
 
 def test_hybrid_retrieval_defaults_bound_each_candidate_pool():

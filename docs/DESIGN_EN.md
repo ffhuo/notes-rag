@@ -221,6 +221,7 @@ POST /search
 
 **The API deliberately does not expose `embed_profile`** — retrieval must use the model that built the index (see M04 §5.3).
 Candidate pool sizes are configured via `.env` variables `VECTOR_RECALL_*`, `BM25_RECALL_*`, and `RERANK_CANDIDATE_*`. Each defaults to `min(max(top_k × 4, 20), 100)`; `top_k` still controls the final result count. The SQLite FTS index backfills existing chunks on first startup and tracks chunk replacement/deletion and note path/title changes.
+BM25 queries filter common Chinese and English question words from jieba's terms so an OR query does not retrieve unrelated chunks based only on generic words such as "what is" or "how to use"; vector recall is unaffected.
 
 ### 5.3 Chat (SSE streaming)
 

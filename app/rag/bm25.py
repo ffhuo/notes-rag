@@ -12,6 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 
 _TOKEN_PATTERN = re.compile(r"[\w+#&.-]+", re.UNICODE)
+_QUERY_STOPWORDS = frozenset(
+    {
+        "是", "什么", "怎么", "如何", "怎样", "为什么", "的", "了", "在",
+        "和", "与", "用", "吗", "呢", "请", "what", "is", "how", "to",
+        "use", "the", "a", "an", "and", "or", "of", "for", "in", "on",
+        "with", "do", "does", "can", "you", "me", "it",
+    }
+)
 
 
 def tokenize(text: str) -> list[str]:
@@ -30,8 +38,10 @@ def tokenize_for_index(text: str) -> str:
 
 
 def build_fts_query(query: str) -> str | None:
-    """Build a safe OR query so any segmented term can contribute to ranking."""
-    terms = list(dict.fromkeys(tokenize(query)))
+    """Build an OR query from informative terms, excluding common question words."""
+    terms = list(
+        dict.fromkeys(term for term in tokenize(query) if term not in _QUERY_STOPWORDS)
+    )
     if not terms:
         return None
     return " OR ".join(f'"{term}"' for term in terms)

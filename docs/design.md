@@ -221,6 +221,7 @@ POST /search
 
 **接口层故意不暴露 `embed_profile`** —— 检索必须用建索引时那个模型（见 M04 §5.3）。
 候选数量由 `.env` 中 `VECTOR_RECALL_*`、`BM25_RECALL_*` 与 `RERANK_CANDIDATE_*` 控制；默认每路为 `min(max(top_k × 4, 20), 100)`，最终返回条数仍由 `top_k` 决定。FTS 索引在 SQLite 中维护，首次启动回填存量 chunk，后续随 chunk 替换、删除和笔记改名/标题更新。
+BM25 查询会从 jieba 分词结果中排除常见中英文疑问词，避免 OR 查询仅凭“是什么 / 怎么用”等通用词召回无关片段；向量召回不受此过滤影响。
 
 ### 5.3 Chat（SSE 流式）
 
