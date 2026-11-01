@@ -21,7 +21,7 @@ from app.api.deps import (
 )
 from app.models.schemas import SearchRequest, SearchResponse
 from app.repositories import vault_repo
-from app.services import retrieval_service
+from app.services import model_service, retrieval_service
 
 router = APIRouter(prefix="/api/v1", tags=["search"])
 
@@ -62,6 +62,7 @@ async def search(
     embed_runtime, embed_profile_id = await resolve_embed_runtime(
         session, user_id, vault
     )
+    rerank_runtime = await model_service.resolve_rerank_runtime(session, user_id)
 
     hits = await retrieval_service.retrieve(
         req.query,
@@ -70,5 +71,6 @@ async def search(
         vault_id=vault.id,
         embed_profile_id=embed_profile_id,
         embed_runtime=embed_runtime,
+        rerank_runtime=rerank_runtime,
     )
     return SearchResponse(hits=hits)

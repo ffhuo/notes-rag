@@ -245,9 +245,13 @@ function ask(params, answerId) {
         finish(answerId, {})
       },
       onError: (e) => {
+        const conflictDetail = typeof e.body?.detail === 'string' ? e.body.detail : ''
         const reason =
           e.status === 409
-            ? '该 vault 还没有可检索的索引，请先到知识库页同步或重建索引。'
+            ? conflictDetail ||
+              (selectedVault.value
+                ? '该 vault 还没有可检索的索引，请先到知识库页同步或重建索引。'
+                : '当前账号下没有已索引的知识库，请先同步或重建索引。')
             : e.status === 404
               ? '所选 vault 不存在或不属于当前账号。'
               : e.message
@@ -651,10 +655,22 @@ async function openConversation(id) {
                         @click="toggleSource(m.id, si)"
                       >
                         <span class="chat__source-title" :title="s.title">{{ s.title || '（无标题）' }}</span>
-                        <span class="chat__score">{{ s.score.toFixed(3) }}</span>
+                        <span class="chat__score">
+                          {{ Number(s.fusion_score ?? s.rerank_score ?? s.score).toFixed(3) }}
+                          <small>{{ s.fusion_score != null ? '跨库融合' : s.rerank_score != null ? '精排分' : '向量分' }}</small>
+                          <small v-if="s.fusion_score != null && s.rerank_score != null">
+                            精排 {{ Number(s.rerank_score).toFixed(3) }}
+                          </small>
+                          <small v-if="s.fusion_score != null || s.rerank_score != null" class="chat__score-vector">
+                            向量 {{ Number(s.score).toFixed(3) }}
+                          </small>
+                        </span>
                         <AppIcon :name="isSourceOpen(m.id, si) ? 'chevron-down' : 'chevron-right'" :size="16" />
                       </button>
-                      <div class="chat__source-path" :title="s.file_path">{{ s.file_path }}</div>
+                      <div class="chat__source-path" :title="s.file_path">
+                        <span v-if="s.vault_name" class="chat__source-vault">{{ s.vault_name }}</span>
+                        <span class="chat__source-file">{{ s.file_path }}</span>
+                      </div>
                       <div
                         v-if="isSourceOpen(m.id, si)"
                         class="chat__source-excerpt"
@@ -1264,6 +1280,8 @@ async function openConversation(id) {
 }
 
 .chat__score {
+  display: grid;
+  justify-items: end;
   flex: none;
   color: var(--color-primary);
   font-family: var(--font-family-mono);
@@ -1272,15 +1290,36 @@ async function openConversation(id) {
   font-variant-numeric: tabular-nums;
 }
 
+.chat__score small {
+  color: var(--color-text-muted);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-caption);
+}
+
+.chat__score .chat__score-vector {
+  margin-top: 2px;
+}
+
 .chat__source-path {
+  display: flex;
+  gap: 5px;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-muted);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-caption);
   line-height: var(--line-height-caption);
+}
+
+.chat__source-vault {
+  flex: none;
+  color: var(--color-primary);
+}
+
+.chat__source-file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 片段预览：展开才显示（默认只给标题与路径），按文件格式渲染

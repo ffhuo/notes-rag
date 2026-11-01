@@ -127,11 +127,14 @@ async def _llm_runtime(session, user_id: str):
 
 def _brief_source(src: dict) -> dict:
     """检索来源精简为「出处 + 相关度」，正文片段对 agent 通常冗余。"""
-    return {
+    result = {
         "file_path": src.get("file_path", ""),
         "title": src.get("title", ""),
         "score": round(float(src.get("score") or 0.0), 4),
     }
+    if src.get("rerank_score") is not None:
+        result["rerank_score"] = round(float(src["rerank_score"]), 4)
+    return result
 
 
 # ──────────────────────────────────────────────
@@ -153,7 +156,8 @@ async def search_notes(
         top_k: 返回片段数上限（默认 5）
         vault_id: 目标知识库 id；只有在一个 vault 时可省略（多个 vault 时必填，见 list_vaults）
 
-    返回: [{file_path, title, content, score, vault_id}, ...]，按相关度降序；无命中返回 []
+    返回: [{file_path, title, content, score, rerank_score?, vault_id}, ...]；
+    配置精排时按 rerank_score 排序，否则按向量 score 排序。
     """
     user_id = await _require_user_id(ctx)
     if not query or not query.strip():
@@ -163,25 +167,30 @@ async def search_notes(
     async with session_scope() as session:
         vault = await _resolve_vault(session, user_id, vault_id)
         embed_runtime, embed_profile_id = await _embed_runtime(session, user_id, vault)
+        rerank_runtime = await model_service.resolve_rerank_runtime(session, user_id)
         hits = await retrieval_service.retrieve(
             query,
             top_k=top_k,
             vault_id=vault.id,
             embed_profile_id=embed_profile_id,
             embed_runtime=embed_runtime,
+            rerank_runtime=rerank_runtime,
         )
 
     logger.info("MCP search_notes", user_id=user_id, vault_id=vault.id, hits=len(hits))
-    return [
-        {
-            "file_path": h.file_path,
-            "title": h.title,
-            "content": h.content,
-            "score": round(float(h.score), 4),
+    result = []
+    for hit in hits:
+        item = {
+            "file_path": hit.file_path,
+            "title": hit.title,
+            "content": hit.content,
+            "score": round(float(hit.score), 4),
             "vault_id": vault.id,
         }
-        for h in hits
-    ]
+        if hit.rerank_score is not None:
+            item["rerank_score"] = round(float(hit.rerank_score), 4)
+        result.append(item)
+    return result
 
 
 async def get_note(

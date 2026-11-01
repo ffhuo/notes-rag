@@ -28,7 +28,7 @@
 - Multi-source vault ingestion (local reference / zip upload / git / remote), with file and folder filtering
 - Multi-format parsing (`.md` / `.txt` / `.docx` / `.pdf` / `.xlsx`). Scanned PDFs are supported:
   text-less pages are rendered to images and recognized by a multimodal LLM — no OCR engine introduced
-- **Multiple LLMs / Embeddings, configurable and selectable** (LLM switchable per request; Embedding bound to the index — switching requires re-indexing)
+- **Multiple model profiles** for LLM, Embedding, ASR, and reranking (LLM switchable per request; Embedding bound to the index — switching requires re-indexing)
 - Frontend SPA (Vault management / search / chat / model management), same-origin hosting on a single port
 - Optional multi-user switch (single-user personal mode by default)
 - Agent integration (MCP server: stdio / Streamable HTTP)
@@ -224,7 +224,8 @@ POST /search
 
 ```
 POST /chat  { query, conversation_id?, top_k, vault_id?, llm_profile? }
-  → resolve LLM (three-level priority) → retrieval_service.retrieve(...)
+  → resolve LLM (three-level priority) → retrieve per vault; omitted vault_id searches all indexed vaults owned by the user
+  → fuse cross-vault results by RRF rank without comparing scores from different embedding spaces
   → assemble system (answer only from <context>, no fabrication) + context chunks + history
   → llm_client.stream_chat(messages, runtime) → yield token by token
   → SSE: data:{"type":"token","text":"..."} … {"type":"sources",...} {"type":"done"}
@@ -232,6 +233,7 @@ POST /chat  { query, conversation_id?, top_k, vault_id?, llm_profile? }
 ```
 
 The frontend reads the stream with `fetch` (`EventSource` cannot send auth headers).
+All-vault mode labels sources with their vault name and returns `409` when no indexed vault is available.
 
 ---
 
@@ -325,7 +327,7 @@ sync_runs(id PK, user_id, vault_id, trigger, mode, dry_run,
 
 > Field-level semantics, list-field parsing pitfalls, and derived methods see **M01 Core Framework & Config**; deployment shapes see **M10 Deployment**.
 
-**Model config is not in `.env`**: all three kinds (LLM / Embedding / ASR) live in the `model_profiles` table, configured via the frontend "Models" page
+**Model config is not in `.env`**: LLM / Embedding / ASR / reranker profiles live in the `model_profiles` table, configured via the frontend "Models" page
 or `POST /api/v1/models` (§10 module index M08). With an empty table, chat / indexing / transcription all return `409` pointing to the config page —
 **no `.env` fallback**, avoiding two sources of truth for the same thing.
 

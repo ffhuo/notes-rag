@@ -224,7 +224,8 @@ POST /search
 
 ```
 POST /chat  { query, conversation_id?, top_k, vault_id?, llm_profile? }
-  → 解析 LLM（三级优先级）→ retrieval_service.retrieve(...)
+  → 解析 LLM（三级优先级）→ 按 vault 检索；vault_id 省略时检索当前用户所有已索引 vault
+  → 跨 vault 结果按 RRF 名次融合，不直接比较不同 embedding 的分数
   → 组装 system（只依据 <context> 回答，禁止编造）+ 上下文片段 + history
   → llm_client.stream_chat(messages, runtime) → 逐 token yield
   → SSE: data:{"type":"token","text":"..."} … {"type":"sources",...} {"type":"done"}
@@ -232,6 +233,7 @@ POST /chat  { query, conversation_id?, top_k, vault_id?, llm_profile? }
 ```
 
 前端用 `fetch` 读 stream（`EventSource` 无法带鉴权头）。
+全部知识库模式会在来源中标记 vault 名称；无已索引 vault 时返回 `409`。
 
 ---
 
@@ -323,7 +325,7 @@ sync_runs(id PK, user_id, vault_id, trigger, mode, dry_run,
 
 > 字段级语义、列表字段解析坑、派生方法见 **M01 基础框架与配置**；部署形态相关见 **M10 部署方案**。
 
-**模型配置不在 `.env`**：LLM / Embedding / ASR 三类全部落 `model_profiles` 表，由前端「模型」页
+**模型配置不在 `.env`**：LLM / Embedding / ASR / Reranker 全部落 `model_profiles` 表，由前端「模型」页
 或 `POST /api/v1/models` 配置（§10 模块索引 M08）。表为空时问答 / 索引 / 语音转写一律返回 `409` 并提示去配置页 ——
 **没有 `.env` 兜底**，避免同一件事出现两处真相。
 
@@ -409,4 +411,3 @@ sync_runs(id PK, user_id, vault_id, trigger, mode, dry_run,
 | M10 | 部署方案 | **P9** | 本地 / Docker、数据卷、反代要点、远程访问强制检查单、容量估算 |
 | M11 | 多格式解析与过滤 | **P10** | 类型矩阵、各格式解析要点、启用路径（md/txt/docx/pdf/xlsx 已实现） |
 | 附录 A | 测试策略与质量保障 | 贯穿 | 测试分层、mock 契约、样本数据、质量门禁、回归清单 |
-

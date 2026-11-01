@@ -3,26 +3,43 @@
 能力：
 - 将用户查询转为向量（embedder.embed_one）
 - 按 (vault_id, embed_profile_id) 定位向量集合（向量空间与模型强绑定，见 §18.2）
-- 向量库检索 Top-K 命中，并按阈值过滤低分噪声
+- 向量库召回候选并按阈值过滤低分噪声；配置默认 reranker 时执行精排
 - 组装含来源路径 / 标题 / 分数 / 片段内容 / 片段内图片信息（images）的 ChunkHit 列表
 - **embedding 与 vault 绑定**：embed_profile_id 由调用方按 vault.embed_profile_id 解析，
   并经 model_service.assert_embed_compatible 守卫（见 §18.2），不可由请求随意指定
 
 主要函数：
-- async def retrieve(query, *, top_k, threshold, vault_id, embed_profile_id, embed_runtime)
+- async def retrieve(query, *, top_k, threshold, vault_id, embed_profile_id, embed_runtime, rerank_runtime)
       -> list[ChunkHit]
+- async def retrieve_across_vaults(query, *, scopes, top_k, rerank_runtime)
+      -> list[ChunkHit]（按 RRF 融合各 vault 的名次）
 
 关联方案：docs/design.md §5.2（Search 数据流）、§10 模块索引 M04 / M08。
 """
 import json
+import time
+from dataclasses import dataclass
 
 from loguru import logger
 
 from app.core.config import settings
 from app.models.schemas import ChunkHit, ModelRuntime
 from app.rag.embedder import embed_one
+from app.rag.reranker import rerank as rerank_documents
 from app.rag.vectorstore import VectorStore
 from app.services.model_service import collection_name
+
+_RRF_K = 60
+
+
+@dataclass(frozen=True)
+class VaultRetrievalScope:
+    """A vault and the embedding profile that owns its indexed vector space."""
+
+    vault_id: int
+    vault_name: str
+    embed_profile_id: int | str
+    embed_runtime: ModelRuntime
 
 
 async def retrieve(
@@ -33,6 +50,7 @@ async def retrieve(
     vault_id: int | str | None = None,
     embed_profile_id: int | str | None = None,
     embed_runtime: ModelRuntime | None = None,
+    rerank_runtime: ModelRuntime | None = None,
 ) -> list[ChunkHit]:
     """语义检索：query → 向量 → 向量库 Top-K → ChunkHit 列表。
 
@@ -43,9 +61,10 @@ async def retrieve(
         vault_id: 目标 vault（决定 collection 隔离命名空间）
         embed_profile_id: 建该 vault 索引时用的 embedding 配置 id（须与 embed_runtime 对应）
         embed_runtime: 检索用 embedding 运行时（须与建索引模型一致）
+        rerank_runtime: 可选精排运行时；传入时过召回后重排并返回最终 top_k
 
     Returns:
-        ChunkHit 列表，按相似度降序；无 vault 上下文或无命中时返回空列表
+        ChunkHit 列表；未配置精排时按向量相似度排序，精排故障时回退该排序
 
     Raises:
         ValueError: 缺少 query / embed_runtime，或 vault_id 与 embed_profile_id 不成对
@@ -73,16 +92,77 @@ async def retrieve(
     )
 
     where = {"vault_id": int(vault_id)}
+    rerank_enabled = rerank_runtime is not None and top_k > 0
+    candidate_k = min(max(top_k * 4, 20), 100) if rerank_enabled else top_k
     raw_hits = await store.query(
         query_vector,
-        top_k=top_k,
+        top_k=candidate_k,
         threshold=threshold,
         where=where,
     )
 
+    rerank_scores: list[float] = []
+    rerank_candidate_count = 0
+    rerank_elapsed_ms: int | None = None
+    if rerank_enabled and raw_hits:
+        rerank_candidate_count = len(raw_hits)
+        started = time.monotonic()
+        try:
+            ranked = await rerank_documents(
+                query,
+                [
+                    (
+                        f"Title: {hit['metadata'].get('title')}\n\n"
+                        if (hit.get("metadata") or {}).get("title")
+                        else ""
+                    )
+                    + str(hit.get("document") or "")
+                    for hit in raw_hits
+                ],
+                rerank_runtime,
+                top_n=min(top_k, len(raw_hits)),
+            )
+            if not ranked:
+                raise ValueError("reranker returned no ranked candidates")
+
+            reranked_hits = []
+            seen: set[int] = set()
+            for index, score in ranked:
+                if (
+                    isinstance(index, bool)
+                    or not isinstance(index, int)
+                    or index < 0
+                    or index >= len(raw_hits)
+                    or index in seen
+                ):
+                    raise ValueError("reranker returned an invalid candidate index")
+                seen.add(index)
+                reranked_hits.append(raw_hits[index])
+                rerank_scores.append(score)
+            raw_hits = reranked_hits[:top_k]
+            rerank_scores = rerank_scores[:top_k]
+        except Exception as e:
+            rerank_elapsed_ms = int((time.monotonic() - started) * 1000)
+            logger.warning(
+                "rerank 失败，降级为向量排序",
+                vault_id=vault_id,
+                profile=rerank_runtime.name,
+                model=rerank_runtime.model,
+                protocol=rerank_runtime.params.get("protocol"),
+                candidates=len(raw_hits),
+                elapsed_ms=rerank_elapsed_ms,
+                error=str(e),
+            )
+            rerank_scores = []
+            raw_hits = raw_hits[:top_k]
+        else:
+            rerank_elapsed_ms = int((time.monotonic() - started) * 1000)
+    elif not rerank_enabled:
+        raw_hits = raw_hits[:top_k]
+
     # 3) 组装 ChunkHit（metadata 由 ingest 阶段写入，缺失字段用默认值兜底）
     hits: list[ChunkHit] = []
-    for h in raw_hits:
+    for i, h in enumerate(raw_hits):
         meta = h.get("metadata") or {}
         hits.append(
             ChunkHit(
@@ -92,6 +172,7 @@ async def retrieve(
                 content=h.get("document", ""),
                 score=float(h.get("score", 0.0)),
                 images=_parse_images(meta.get("images")),
+                rerank_score=rerank_scores[i] if rerank_scores else None,
             )
         )
 
@@ -100,8 +181,60 @@ async def retrieve(
         vault_id=vault_id, collection=coll,
         requested=top_k, returned=len(hits), threshold=threshold,
         model=embed_runtime.model,
+        reranker=rerank_runtime.model if rerank_runtime is not None else None,
+        rerank_protocol=(
+            rerank_runtime.params.get("protocol")
+            if rerank_runtime is not None
+            else None
+        ),
+        rerank_candidates=rerank_candidate_count,
+        rerank_elapsed_ms=rerank_elapsed_ms,
     )
     return hits
+
+
+async def retrieve_across_vaults(
+    query: str,
+    *,
+    scopes: list[VaultRetrievalScope],
+    top_k: int = 5,
+    threshold: float = 0.0,
+    rerank_runtime: ModelRuntime | None = None,
+) -> list[ChunkHit]:
+    """Retrieve within each vault's embedding space, then fuse the ranked lists.
+
+    Vector and reranker scores are only meaningful within a vault's retrieval
+    context. Reciprocal rank fusion combines those lists without comparing the
+    underlying score scales.
+    """
+    ranked_hits: list[tuple[float, ChunkHit]] = []
+    for scope in scopes:
+        vault_hits = await retrieve(
+            query,
+            top_k=top_k,
+            threshold=threshold,
+            vault_id=scope.vault_id,
+            embed_profile_id=scope.embed_profile_id,
+            embed_runtime=scope.embed_runtime,
+            rerank_runtime=rerank_runtime,
+        )
+        for rank, hit in enumerate(vault_hits, start=1):
+            fusion_score = 1 / (_RRF_K + rank)
+            ranked_hits.append(
+                (
+                    fusion_score,
+                    hit.model_copy(
+                        update={
+                            "vault_id": scope.vault_id,
+                            "vault_name": scope.vault_name,
+                            "fusion_score": fusion_score,
+                        }
+                    ),
+                )
+            )
+
+    ranked_hits.sort(key=lambda result: result[0], reverse=True)
+    return [hit for _, hit in ranked_hits[:top_k]]
 
 
 def _parse_images(raw) -> list[dict]:

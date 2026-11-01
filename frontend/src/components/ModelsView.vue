@@ -25,12 +25,14 @@ const TABS = [
   { value: 'llm', label: 'LLM 对话模型' },
   { value: 'embed', label: 'Embedding 向量模型' },
   { value: 'asr', label: '语音识别' },
+  { value: 'rerank', label: 'Reranker 重排模型' },
 ]
 
 const KIND_OPTIONS = [
   { value: 'llm', label: 'llm（对话 / 问答）' },
   { value: 'embed', label: 'embed（向量化）' },
   { value: 'asr', label: 'asr（语音转文字）' },
+  { value: 'rerank', label: 'rerank（检索重排）' },
 ]
 
 // asr 的调用协议：不同厂商的语音接口不是同一套（详见 app/api/routes/audio.py）。
@@ -38,6 +40,11 @@ const KIND_OPTIONS = [
 const ASR_PROTOCOL_OPTIONS = [
   { value: '', label: 'OpenAI ASR（/audio/transcriptions，默认）' },
   { value: 'dashscope_native', label: 'DashScope 原生（百炼 Qwen-Audio-3.x-ASR-Flash）' },
+]
+
+const RERANK_PROTOCOL_OPTIONS = [
+  { value: 'siliconflow', label: '硅基流动' },
+  { value: 'cohere', label: 'Cohere' },
 ]
 
 const models = ref([])
@@ -67,7 +74,7 @@ function blankForm() {
     base_url: '',
     api_key: '',
     set_default: false,
-    protocol: '',   // 仅 asr 用：'' = OpenAI ASR，'dashscope_native' = 百炼原生协议
+    protocol: '',   // asr / rerank 的 provider 协议标识
     multimodal: false,  // 仅 llm 用：是否支持图片输入（params.multimodal）
     params: {},     // 编辑时承接后端已有 params，保存时按类型增删对应键
   }
@@ -111,6 +118,7 @@ const counts = computed(() => ({
   llm: models.value.filter((m) => m.kind === 'llm').length,
   embed: models.value.filter((m) => m.kind === 'embed').length,
   asr: models.value.filter((m) => m.kind === 'asr').length,
+  rerank: models.value.filter((m) => m.kind === 'rerank').length,
 }))
 
 const visible = computed(() => {
@@ -154,7 +162,11 @@ const blockedCount = computed(
 /* ---------- 新建 / 编辑 ---------- */
 
 function openCreate() {
-  form.value = { ...blankForm(), kind: activeKind.value }
+  form.value = {
+    ...blankForm(),
+    kind: activeKind.value,
+    protocol: activeKind.value === 'rerank' ? 'siliconflow' : '',
+  }
   formError.value = ''
   editing.value = true
 }
@@ -168,7 +180,7 @@ function openEdit(m) {
     base_url: m.base_url || '',
     api_key: '',
     set_default: !!m.is_default,
-    protocol: m.params?.protocol === 'dashscope_native' ? 'dashscope_native' : '',
+    protocol: m.params?.protocol || '',
     multimodal: !!m.params?.multimodal,
     params: { ...(m.params || {}) },
   }
@@ -200,6 +212,12 @@ async function save() {
       // 勾选 = 支持图片输入：索引时会调用该模型理解笔记里的图片
       if (f.multimodal) params.multimodal = true
       else delete params.multimodal
+    } else if (f.kind === 'rerank') {
+      if (!['siliconflow', 'cohere'].includes(f.protocol)) {
+        formError.value = '请选择 reranker 协议'
+        return
+      }
+      params = { ...(f.params || {}), protocol: f.protocol }
     }
 
     if (f.id) {
@@ -287,17 +305,20 @@ async function doRemove() {
       <div>
         <div class="eyebrow"><span class="eyebrow__dot"></span> MODEL CONFIGURATION</div>
         <h1>为每类任务选择合适模型</h1>
-        <p>LLM 可随问答切换；Embedding 与已有索引绑定；ASR 用于语音转写。</p>
+        <p>管理对话、向量化、语音识别与检索重排模型配置。</p>
       </div>
       <AppButton variant="primary" icon="plus" @click="openCreate">新建模型</AppButton>
     </header>
 
     <p class="models__warning">
       <AppIcon name="info" :size="15" />
-      <span><strong>Embedding 提醒：</strong>更换向量模型后，相关知识库需要重建索引。</span>
+      <span>
+        <strong>Embedding：</strong>更换向量模型后需要重建索引。
+        <strong>Reranker：</strong>设为默认后会自动用于 Search 和 Chat；未配置时保持向量排序，调用失败会自动降级。
+      </span>
     </p>
 
-    <!-- Tabs：两个 kind 各自一张表（规范 §5.5） -->
+    <!-- Each model kind has its own configuration list. -->
     <div class="models__tabs" role="tablist">
       <button
         v-for="t in TABS"
@@ -366,6 +387,9 @@ async function doRemove() {
               <strong>{{ row.name }}</strong>
               <span v-if="row.is_default" class="models__default"><AppIcon name="star" :size="13" />默认</span>
               <span v-if="row.kind === 'llm' && row.params?.multimodal" class="models__tag">支持图片</span>
+              <span v-if="row.kind === 'rerank'" class="models__tag">
+                {{ row.params?.protocol === 'cohere' ? 'Cohere' : '硅基流动' }}
+              </span>
             </div>
             <code class="models__row-model">{{ row.model }}</code>
             <div class="models__row-meta">
@@ -429,8 +453,8 @@ async function doRemove() {
           v-model="form.base_url"
           label="端点 base_url"
           mono
-          placeholder="https://api.openai.com/v1"
-          hint="留空 = 用 OpenAI 官方端点；第三方服务请填自己的地址（如 https://api.siliconflow.cn/v1）"
+          :placeholder="form.kind === 'rerank' ? (form.protocol === 'cohere' ? 'https://api.cohere.com' : 'https://api.siliconflow.cn/v1') : 'https://api.openai.com/v1'"
+          :hint="form.kind === 'rerank' ? '留空使用所选协议的官方端点；也可填写服务根地址或完整 /rerank endpoint' : '留空 = 用 OpenAI 官方端点；第三方服务请填自己的地址（如 https://api.siliconflow.cn/v1）'"
         />
         <AppInput
           v-model="form.api_key"
@@ -446,6 +470,13 @@ async function doRemove() {
           :options="ASR_PROTOCOL_OPTIONS"
           hint="OpenAI ASR 走 multipart /audio/transcriptions；百炼 qwen3-asr-flash 是对话协议（音频走 Base64），选错会直接报错"
         />
+        <AppSelect
+          v-if="form.kind === 'rerank'"
+          v-model="form.protocol"
+          label="Rerank API 协议"
+          :options="RERANK_PROTOCOL_OPTIONS"
+          hint="选择与服务端点匹配的协议；保存为默认后，Search 和 Chat 会自动重排检索候选。"
+        />
         <AppField
           v-if="form.kind === 'llm'"
           hint="勾选后，索引会把笔记里的图片交给该模型理解并转成文字（外链直传 URL，本地图读取后转 Base64）；未勾选或没有此类模型时图片会被跳过。"
@@ -458,7 +489,7 @@ async function doRemove() {
         <AppField>
           <label class="models__check">
             <input v-model="form.set_default" type="checkbox" />
-            <span>设为该类型的默认模型</span>
+            <span>设为该类型的默认模型{{ form.kind === 'rerank' ? '（自动启用检索重排）' : '' }}</span>
           </label>
         </AppField>
         <p v-if="formError" class="models__form-error">{{ formError }}</p>

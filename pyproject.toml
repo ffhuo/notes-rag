@@ -22,6 +22,7 @@ dependencies = [
     "aiosqlite>=0.19",
     "chromadb>=0.5",
     "openai>=1.30",
+    "httpx>=0.27",
     # Agent 接入（MCP server，见 docs/design.md §10 模块索引 M09）
     # 2.x 起 FastMCP 更名为 MCPServer（from mcp.server.mcpserver import MCPServer），
     # 且 Streamable HTTP 的鉴权/session API 有变；app/mcp 按 2.x 编写，勿降到 1.x

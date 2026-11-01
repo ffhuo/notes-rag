@@ -220,7 +220,13 @@ function resetSearch() {
               <h3 :title="h.title">{{ h.title || '（无标题）' }}</h3>
               <span :title="h.file_path"><AppIcon name="file-text" :size="13" />{{ h.file_path }}</span>
             </div>
-            <span class="search-score"><strong>{{ Number(h.score).toFixed(3) }}</strong><small>相关度</small></span>
+            <span class="search-score">
+              <strong>{{ Number(h.rerank_score ?? h.score).toFixed(3) }}</strong>
+              <small>{{ h.rerank_score != null ? '精排分' : '向量分' }}</small>
+              <small v-if="h.rerank_score != null" class="search-score__vector">
+                向量 {{ Number(h.score).toFixed(3) }}
+              </small>
+            </span>
           </div>
 
           <!-- 按文件格式还原：markdown 走渲染，其余按纯文本原样显示（见 markdown.js） -->
@@ -541,6 +547,11 @@ function resetSearch() {
 .search-score small {
   color: var(--ui-muted);
   font-size: 8px;
+}
+
+.search-score .search-score__vector {
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
 }
 
 .search-result__expand {

@@ -1,4 +1,4 @@
-"""ORM·模型配置 — model_profiles 表（LLM / Embedding 多模型管理，design.md §10 模块索引 M08）。"""
+"""ORM·模型配置 — model_profiles 表（多模型管理，design.md §10 模块索引 M08）。"""
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import String, Boolean, DateTime, func
 
@@ -6,9 +6,9 @@ from app.models.base import Base
 
 
 class ModelProfile(Base):
-    """模型配置表：允许用户配置多个 LLM / Embedding，使用时选择。
+    """模型配置表：允许用户配置多个模型种类，使用时选择。
 
-    - kind：'llm'（对话/问答）或 'embed'（向量化）；两类各自独立解析默认项
+    - kind：任务类型（llm / embed / asr / rerank），各自独立管理默认项
     - name：用户内唯一的可读名（如 'qwen-max' / 'bge-m3-local'）
     - provider：'openai'（OpenAI 兼容协议）；为将来非兼容协议预留
     - base_url / api_key / model：连接三元组
@@ -21,7 +21,7 @@ class ModelProfile(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[str] = mapped_column(String, default="default")
-    kind: Mapped[str] = mapped_column(String)              # llm | embed
+    kind: Mapped[str] = mapped_column(String)              # llm | embed | asr | rerank
     name: Mapped[str] = mapped_column(String)
     provider: Mapped[str] = mapped_column(String, default="openai")
     base_url: Mapped[str] = mapped_column(String, default="")

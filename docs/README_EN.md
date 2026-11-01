@@ -4,7 +4,7 @@
 
 > A self-hosted knowledge base app (RAG) — turn your Markdown / plain-text notes (an Obsidian vault or any directory) into a **searchable, Q&A-ready Web application** (backend API + frontend UI).
 > Vaults are configured in the web UI (add a local directory / upload a vault `.zip`); multi-user support is controlled by a config switch (single-user by default).
-> Configure **multiple LLMs / multiple Embedding models** and choose per use: the LLM can be switched on every request; the Embedding model is bound to the index, so switching requires re-indexing (see module index M08 in `DESIGN_EN.md`).
+> Configure multiple LLM, Embedding, ASR, and reranker profiles: the LLM can be switched on every request; the Embedding model is bound to the index, so switching requires re-indexing (see module index M08 in `DESIGN_EN.md`).
 > Supported parsers: `.md` / `.txt` / `.docx` / `.pdf` / `.xlsx` (scanned PDFs go through a multimodal LLM), plus file/folder filtering (module index M11).
 > The repo ships a layered architecture with a **design overview**: `DESIGN_EN.md` (architecture / layout / choices / data flow / API / data model / config / conventions / module index) — implement the business logic step by step from the docs, or deploy it directly as a self-hosted knowledge base.
 
@@ -173,12 +173,13 @@ Vaults are configured entirely at runtime via the UI / API, **not in `.env`**: o
 - **false (single-user)**: everything belongs to `user_id="default"`; APIs authenticate via `X-API-Key`; no login page (enter the API Key once in settings).
 - **true (multi-user)**: enables the `users` table + JWT (`JWT_SECRET` required); the frontend shows a Login page; protected APIs accept both `X-API-Key` and `Bearer <JWT>`; vaults / conversations are isolated per user (see M06).
 
-### Multi-model (multiple LLMs / Embeddings, selectable per use)
+### Multi-model (LLM / Embedding / ASR / Reranker)
 
-Model configuration (LLM / Embedding / ASR) lives entirely in the `model_profiles` table — **`.env` no longer provides model config** (no fallbacks); the "Models" page can create/edit/delete, set defaults, and test connections.
+Model configuration lives entirely in the `model_profiles` table — **`.env` no longer provides model config** (no fallbacks); the "Models" page can create/edit/delete, set defaults, and test connections.
 
 - **LLM**: stateless — **switchable on every request** (`ChatRequest.llm_profile`, a dropdown on the chat page).
 - **Embedding**: strongly bound to the index — vectors are split into collections by `v{vault}_m{profile}`, so retrieval must use the same model that built the index; switching = reindex that vault (`POST /vaults/{id}/reindex?embed_profile=...`). The API **deliberately does not expose** `SearchRequest.embed_profile`, avoiding the silent failure of "recalls results but all noise".
+- **Reranker**: configure a SiliconFlow or Cohere `kind=rerank` profile and make it the default to rerank Search, Chat, and MCP search candidates automatically. Without a default, vector ranking remains unchanged; failures are logged and fall back to vector order. Candidate count is `min(max(top_k × 4, 20), 100)`, and `score` remains vector similarity while `rerank_score` carries the optional reranker score.
 
 See `DESIGN_EN.md` module index M08.
 

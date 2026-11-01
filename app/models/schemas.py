@@ -225,6 +225,7 @@ class SearchRequest(BaseModel):
 class ChunkHit(BaseModel):
     """检索命中的片段。
 
+    rerank_score 是可选的精排分数；score 始终表示向量相似度。
     images 来自 chunk.metadata["images"]（ingest 阶段写入），描述**本片段内含**的图片：
     uid（关联 image_cache 行的溯源依据）/ ref（图片地址：URL 或相对 vault 根的路径）/
     kind（local|remote）/ raw（原始图片语法，供回填）/ alt / offset（片段内偏移）/ model。
@@ -236,6 +237,10 @@ class ChunkHit(BaseModel):
     title: str
     content: str
     score: float
+    rerank_score: float | None = None
+    vault_id: int | None = None
+    vault_name: str | None = None
+    fusion_score: float | None = None
     images: list[dict] = []
 
 
@@ -301,7 +306,7 @@ class ModelRuntime(BaseModel):
     已带上默认参数，rag 层不再关心 DB、用户默认等概念。
     """
 
-    kind: str                      # llm | embed | asr
+    kind: str                      # llm | embed | asr | rerank
     name: str                      # profile 名，便于日志与追踪
     base_url: str
     api_key: SecretStr
@@ -310,8 +315,8 @@ class ModelRuntime(BaseModel):
 
 
 class ModelProfileCreate(BaseModel):
-    """新建一个模型配置（LLM / Embedding / ASR）。"""
-    kind: str                                   # llm | embed | asr
+    """新建一个模型配置（LLM / Embedding / ASR / reranker）。"""
+    kind: str                                   # llm | embed | asr | rerank
     name: str                                   # 用户内唯一，如 'qwen-max' / 'bge-m3-local'
     model: str                                  # 模型标识，如 gpt-4o-mini / text-embedding-3-small
     provider: str = "openai"                    # OpenAI 兼容协议（Qwen / vLLM / 本地服务同）
