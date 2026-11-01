@@ -23,7 +23,7 @@
 """
 from dataclasses import dataclass
 
-from sqlalchemy import select, delete as sa_delete
+from sqlalchemy import select, delete as sa_delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Note, Chunk
@@ -52,6 +52,32 @@ async def list_note_paths(session: AsyncSession, vault_id: int) -> dict[str, Not
         select(Note).where(Note.vault_id == vault_id)
     )
     return {n.file_path: n for n in result.scalars().all()}
+
+
+async def indexed_counts_by_vault(
+    session: AsyncSession,
+    vault_ids: list[int],
+) -> dict[int, tuple[int, int]]:
+    """批量统计每个 vault 的已索引文件（notes）与片段（chunks）数量。"""
+    if not vault_ids:
+        return {}
+
+    note_result = await session.execute(
+        select(Note.vault_id, func.count(Note.id))
+        .where(Note.vault_id.in_(vault_ids))
+        .group_by(Note.vault_id)
+    )
+    chunk_result = await session.execute(
+        select(Chunk.vault_id, func.count(Chunk.id))
+        .where(Chunk.vault_id.in_(vault_ids))
+        .group_by(Chunk.vault_id)
+    )
+    counts = {vault_id: [0, 0] for vault_id in vault_ids}
+    for vault_id, count in note_result.all():
+        counts[vault_id][0] = count
+    for vault_id, count in chunk_result.all():
+        counts[vault_id][1] = count
+    return {vault_id: (values[0], values[1]) for vault_id, values in counts.items()}
 
 
 async def upsert_note(

@@ -635,18 +635,25 @@ async function openConversation(id) {
 
               <!-- 来源：流结束后折叠展示，展开后可逐条看片段预览 -->
               <div v-if="m.role === 'assistant' && m.sources.length" class="chat__sources">
-                <AppButton
-                  variant="ghost"
-                  size="sm"
-                  :icon="sourcesOpen[m.id] ? 'chevron-down' : 'chevron-right'"
+                <button
+                  type="button"
+                  class="chat__sources-heading"
+                  :aria-expanded="!!sourcesOpen[m.id]"
                   @click="toggleSources(m.id)"
                 >
-                  来源（{{ m.sources.length }}）
-                </AppButton>
+                  <span class="chat__sources-heading-title">
+                    <AppIcon name="file-text" :size="15" />
+                    引用来源
+                  </span>
+                  <span class="chat__sources-heading-count">{{ m.sources.length }} 个片段</span>
+                  <AppIcon
+                    :name="sourcesOpen[m.id] ? 'chevron-down' : 'chevron-right'"
+                    :size="15"
+                  />
+                </button>
 
                 <ol v-if="sourcesOpen[m.id]" class="chat__source-list">
                   <li v-for="(s, si) in m.sources" :key="`${s.note_id}-${si}`" class="chat__source">
-                    <span class="chat__source-no">{{ si + 1 }}</span>
                     <div class="chat__source-body">
                       <button
                         type="button"
@@ -654,6 +661,7 @@ async function openConversation(id) {
                         :aria-expanded="isSourceOpen(m.id, si)"
                         @click="toggleSource(m.id, si)"
                       >
+                        <span class="chat__source-no">{{ String(si + 1).padStart(2, '0') }}</span>
                         <span class="chat__source-title" :title="s.title">{{ s.title || '（无标题）' }}</span>
                         <span class="chat__score">
                           {{ Number(s.fusion_score ?? s.rerank_score ?? s.score).toFixed(3) }}
@@ -1209,9 +1217,48 @@ async function openConversation(id) {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  align-items: flex-start;
   border-top: var(--border-width) solid var(--color-border);
   padding-top: var(--space-3);
+}
+
+.chat__sources-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat__sources-heading:focus-visible,
+.chat__source-toggle:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.chat__sources-heading-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.chat__sources-heading-title > :deep(svg) {
+  color: var(--color-primary);
+}
+
+.chat__sources-heading-count {
+  flex: 1 1 auto;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
 }
 
 .chat__source-list {
@@ -1226,20 +1273,17 @@ async function openConversation(id) {
 
 /* 一条来源：序号 + 正文（标题/路径/片段预览），序号让「引用了哪几条」可数 */
 .chat__source {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
+  display: block;
   min-width: 0;
-  padding: var(--space-3);
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-surface);
-  box-shadow: var(--shadow-xs);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--color-primary);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  background: var(--color-primary-soft);
 }
 
 .chat__source-no {
   flex: none;
-  color: var(--color-text-muted);
+  color: var(--color-primary-on-soft);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-code);
   line-height: var(--line-height-code);
@@ -1247,9 +1291,8 @@ async function openConversation(id) {
 
 .chat__source-body {
   display: flex;
-  flex: 1 1 auto;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
   min-width: 0;
 }
 
@@ -1261,7 +1304,7 @@ async function openConversation(id) {
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--color-text-muted);
+  color: var(--color-primary-on-soft);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -1283,7 +1326,7 @@ async function openConversation(id) {
   display: grid;
   justify-items: end;
   flex: none;
-  color: var(--color-primary);
+  color: var(--color-primary-on-soft);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-code);
   line-height: var(--line-height-code);
@@ -1291,7 +1334,7 @@ async function openConversation(id) {
 }
 
 .chat__score small {
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-family: var(--font-family-sans);
   font-size: var(--font-size-caption);
 }
@@ -1302,18 +1345,19 @@ async function openConversation(id) {
 
 .chat__source-path {
   display: flex;
-  gap: 5px;
+  gap: var(--space-1);
   min-width: 0;
   white-space: nowrap;
   color: var(--color-text-muted);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-caption);
   line-height: var(--line-height-caption);
+  padding-left: 22px;
 }
 
 .chat__source-vault {
   flex: none;
-  color: var(--color-primary);
+  color: var(--color-primary-on-soft);
 }
 
 .chat__source-file {
@@ -1326,6 +1370,7 @@ async function openConversation(id) {
    —— markdown 笔记直接显示原文的话，`##`、`**` 会糊在卡片上 */
 .chat__source-excerpt {
   margin-top: var(--space-1);
+  margin-left: 22px;
   padding-top: var(--space-2);
   border-top: var(--border-width) solid var(--color-border);
   color: var(--color-text-secondary);

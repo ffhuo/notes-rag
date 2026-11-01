@@ -410,6 +410,30 @@ class VaultOut(BaseModel):
     # 作业回写状态（见 M06 ADR-9）：只在作业成功后更新，失败/取消保持原值
     embed_profile_id: int | None = None
     embed_indexed_profiles: List[int] = []
+    indexed_file_count: int = 0
+    chunk_count: int = 0
+
+
+class VaultFileOut(BaseModel):
+    """Vault 当前符合摄取过滤条件的单个文件。"""
+
+    path: str
+    name: str
+    size_bytes: int
+    modified_at: int
+    indexed_at: int | None = None
+    status: Literal["indexed", "indexing", "pending", "error"]
+
+
+class VaultFilesOut(BaseModel):
+    """Vault 文件清单的分页响应。"""
+
+    files: List[VaultFileOut] = []
+    total: int = 0
+    page: int
+    page_size: int
+    counts: dict[str, int] = {}
+    scan_complete: bool = True
 
 
 # ===== 多用户鉴权（ENABLE_MULTIUSER=true，见 docs/design.md §17.3）=====

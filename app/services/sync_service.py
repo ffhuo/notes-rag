@@ -391,13 +391,26 @@ async def _run_rebuild(
 # ===== 扫描与过滤 =====
 
 
-def _scan(root: Path, filters: "Optional[IngestFilters]") -> tuple[dict[str, FileSig], bool]:
+def scan_files(
+    root: Path,
+    filters: "Optional[IngestFilters]",
+    config=settings,
+) -> tuple[dict[str, FileSig], bool]:
+    """按索引同步的相同过滤规则扫描文件，供 Vault 文件清单复用。"""
+    return _scan(root, filters, config)
+
+
+def _scan(
+    root: Path,
+    filters: "Optional[IngestFilters]",
+    config=settings,
+) -> tuple[dict[str, FileSig], bool]:
     """遍历目录，返回 {POSIX 相对路径: FileSig(仅 L1)}；scan_complete=False 表示有遍历错误。"""
-    exts = _norm_exts(filters.exts if filters and filters.exts else settings.ingest_exts)
-    exclude_dirs = set(settings.ingest_exclude_dirs)
+    exts = _norm_exts(filters.exts if filters and filters.exts else config.ingest_exts)
+    exclude_dirs = set(config.ingest_exclude_dirs)
     max_size = (
         filters.max_file_size if filters and filters.max_file_size
-        else settings.max_file_size
+        else config.max_file_size
     )
     includes = filters.include if filters and filters.include else None
     excludes = filters.exclude if filters and filters.exclude else None

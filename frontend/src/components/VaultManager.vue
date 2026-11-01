@@ -25,10 +25,11 @@
 // 提交后跳转 /tasks?run_id=…，让用户立刻看到进度，而不是盯着一个没有反馈的按钮。
 //
 // 作业数据来自公共件 useRunsPolling（与侧栏作业状态、Tasks 页共用一份请求）。
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { vaultsApi } from '../api'
 import { useRunsPolling } from '../composables/useRunsPolling'
+import { useVaultFiles } from '../composables/useVaultFiles'
 import { isTerminal, relativeTime } from '../jobs'
 import { toast } from '../toast'
 import { PACK_LIMITS, formatBytes, summarize } from '../transport/zip'
@@ -44,7 +45,9 @@ import AppModal from './AppModal.vue'
 import AppProgress from './AppProgress.vue'
 import AppSelect from './AppSelect.vue'
 import AppStatusBadge from './AppStatusBadge.vue'
+import VaultCard from './VaultCard.vue'
 import VaultFilters from './VaultFilters.vue'
+import VaultFilesPanel from './VaultFilesPanel.vue'
 
 const router = useRouter()
 const { vaults, runs, loading, error, refresh } = useRunsPolling()
@@ -156,6 +159,12 @@ function filterSummary(v) {
   return parts.length ? parts.join(' · ') : ''
 }
 
+function embedSummary(v) {
+  const profiles = v?.embed_indexed_profiles || []
+  const history = profiles.length ? ` · 已建过 [${profiles.join(', ')}]` : ''
+  return `Embedding：${v?.embed_profile_id ?? '未设置'}${history}`
+}
+
 /** 是否已选好待上传的文件夹（决定过滤区文案与目录树是否可用）。 */
 const hasFolder = computed(() => !!folderFiles.value?.length)
 
@@ -252,8 +261,26 @@ const selectedRun = computed(
   () => selectedVault.value ? latestByVault.value[selectedVault.value.id] || null : null,
 )
 
-const selectedRunActive = computed(
-  () => selectedRun.value && !isTerminal(selectedRun.value.status),
+const selectedVaultIdForFiles = computed(() => selectedVault.value?.id ?? null)
+const {
+  files: vaultFileItems,
+  counts: vaultFileCounts,
+  total: vaultFileTotal,
+  page: vaultFilePage,
+  pageSize: vaultFilePageSize,
+  search: vaultFileSearch,
+  status: vaultFileStatus,
+  loading: vaultFilesLoading,
+  error: vaultFilesError,
+  scanComplete: vaultFilesScanComplete,
+  refresh: refreshVaultFiles,
+} = useVaultFiles(selectedVaultIdForFiles)
+
+watch(
+  [() => selectedRun.value?.id, () => selectedRun.value?.status],
+  () => {
+    if (selectedVault.value) refreshVaultFiles()
+  },
 )
 
 /* ---------- 添加 ---------- */
@@ -416,6 +443,7 @@ async function doUpload() {
       addOpen.value = false
       toast.success('文件已更新，正在同步索引')
       await refresh()
+      await refreshVaultFiles()
       await autoSubmit(target.id)
       return
     }
@@ -461,6 +489,7 @@ async function submitEdit() {
     await vaultsApi.update(v.id, { name, filters: filtersPayload(editForm.value.filters) })
     editOpen.value = false
     await refresh()
+    await refreshVaultFiles()
     if (v.source_type === 'uploaded') {
       // 上传型卡片没有「同步」按钮（重扫看不到本机新文件），若不自动跑一次，
       // 新排除规则与 prune 永远不会落到索引上 —— 这里代跑一次增量同步。
@@ -648,171 +677,56 @@ async function doRemove() {
           description="试试放宽筛选条件。"
         />
 
-        <div v-else class="vault-cards">
-          <AppCard
-            v-for="v in visibleVaults"
-            :key="v.id"
-            padding="sm"
-            class="vault-card panel"
-            :class="{ 'is-selected': selectedVault?.id === v.id }"
-          >
-            <button
-              class="vault-card__select"
-              type="button"
-              :aria-pressed="selectedVault?.id === v.id"
-              @click="selectedVaultId = v.id"
-            >
-              <span class="vault-card__icon"><AppIcon :name="v.source_type === 'uploaded' ? 'upload' : 'vaults'" :size="17" /></span>
-              <span class="vault-card__copy">
-                <strong :title="v.name">{{ v.name }}</strong>
-                <small>{{ v.source_type === 'uploaded' ? '上传文件夹' : '服务器目录' }}</small>
-              </span>
-              <span v-if="selectedVault?.id === v.id" class="vault-card__check"><AppIcon name="check" :size="13" /></span>
-            </button>
-
-        <span class="vaults__meta">
-          <AppIcon :name="v.source_type === 'uploaded' ? 'upload' : 'folder'" :size="14" />
-          <span class="vaults__meta-text">{{ v.source_value }}</span>
-        </span>
-        <span class="vaults__meta">
-          <AppIcon name="models" :size="14" />
-          <span class="vaults__meta-text">
-            embed：{{ v.embed_profile_id ?? '未索引' }}
-            <template v-if="v.embed_indexed_profiles?.length">
-              · 已建过 [{{ v.embed_indexed_profiles.join(', ') }}]
-            </template>
-          </span>
-        </span>
-        <span class="vaults__meta">
-          <AppIcon name="clock" :size="14" />
-          <span class="vaults__meta-text">
-            上次索引：{{ relativeTime(v.indexed_at) || '—' }}
-          </span>
-        </span>
-        <span v-if="filterSummary(v)" class="vaults__meta">
-          <AppIcon name="filter" :size="14" />
-          <span class="vaults__meta-text">过滤：{{ filterSummary(v) }}</span>
-        </span>
-
-        <!-- 当前作业：内联进度 + 取消；点按跳到任务页看详情 -->
-        <div v-if="activeOf(v)" class="vaults__active">
-          <AppProgress :run="activeOf(v)" compact />
-          <div class="vaults__active-actions">
-            <AppButton
-              variant="ghost"
-              size="sm"
-              :disabled="!!activeOf(v).cancelling"
-              @click="onCancel(activeOf(v))"
-            >
-              {{ activeOf(v).cancelling ? '正在停止…' : '取消' }}
-            </AppButton>
-            <AppButton
-              variant="ghost"
-              size="sm"
-              icon-right="chevron-right"
-              @click="goTasks(v.id, { run_id: activeOf(v).id })"
-            >
-              查看
-            </AppButton>
+        <div v-else class="vault-list">
+          <div class="vault-list__heading">
+            <h2>我的知识库</h2>
+            <span>{{ visibleVaults.length }} 个 Vault</span>
+          </div>
+          <div class="vault-cards">
+            <VaultCard
+              v-for="v in visibleVaults"
+              :key="v.id"
+              :vault="v"
+              :selected="selectedVault?.id === v.id"
+              :run="latestByVault[v.id]"
+              @select="selectedVaultId = $event"
+            />
           </div>
         </div>
 
-        <template #footer>
-          <span class="vaults__actions">
-            <!-- 上传型库的文件只存在于服务端副本，重扫不会发现任何新内容 —— 入口必须是「重新上传」 -->
-            <AppButton
-              v-if="v.source_type === 'uploaded'"
-              variant="secondary"
-              size="sm"
-              icon="upload"
-              title="重新上传文件夹：整包替换服务端副本，并自动同步索引"
-              @click="openUpdate(v)"
-            >
-              更新文件
-            </AppButton>
-            <template v-else>
-              <AppButton variant="secondary" size="sm" icon="refresh" @click="submit(v.id, { mode: 'sync' })">
-                同步
-              </AppButton>
-              <AppButton variant="secondary" size="sm" @click="submit(v.id, { mode: 'sync', dry_run: true })">
-                预览变更
-              </AppButton>
-            </template>
-            <AppButton variant="secondary" size="sm" icon="zap" @click="reindex(v.id)">
-              重建索引
-            </AppButton>
-            <AppButton variant="secondary" size="sm" icon="filter" @click="openEdit(v)">
-              过滤设置
-            </AppButton>
-            <AppButton variant="danger" size="sm" icon="trash" @click="askRemove(v)">
-              删除
-            </AppButton>
-          </span>
-        </template>
-          </AppCard>
-        </div>
-
-        <section v-if="selectedVault" class="files-panel panel">
-          <header class="files-panel__heading">
-            <div class="files-panel__title">
-              <span class="section-icon"><AppIcon name="vaults" :size="17" /></span>
-              <div><h2>{{ selectedVault.name }}</h2><p>知识库配置与索引信息</p></div>
-            </div>
-            <AppStatusBadge v-if="statusOf(selectedVault)" :status="statusOf(selectedVault)" size="sm" />
-            <span v-else class="vaults__idle">尚无作业</span>
-          </header>
-          <div class="vault-details">
-            <div><small>来源路径</small><span :title="selectedVault.source_value">{{ selectedVault.source_value }}</span></div>
-            <div><small>Embedding 配置</small><span>{{ selectedVault.embed_profile_id ?? '未设置' }}</span></div>
-            <div><small>最近索引</small><span>{{ relativeTime(selectedVault.indexed_at) || '尚未索引' }}</span></div>
-            <div><small>索引模型记录</small><span>{{ selectedVault.embed_indexed_profiles?.length ? selectedVault.embed_indexed_profiles.join('、') : '暂无记录' }}</span></div>
-            <div class="vault-details__filters"><small>过滤规则</small><span>{{ filterSummary(selectedVault) || '未配置额外过滤规则' }}</span></div>
-          </div>
-          <div class="vault-actions">
-            <AppButton variant="secondary" size="sm" icon="filter" @click="openEdit(selectedVault)">过滤设置</AppButton>
-            <AppButton
-              v-if="selectedRun"
-              variant="secondary"
-              size="sm"
-              icon="tasks"
-              @click="router.push({ name: 'tasks', query: { vault_id: String(selectedVault.id), run_id: String(selectedRun.id) } })"
-            >
-              查看任务
-            </AppButton>
-          </div>
-        </section>
-      </div>
-
-      <aside v-if="selectedVault" class="vault-side-column">
-        <section class="index-card panel">
-          <div class="index-card__top">
-            <span class="section-icon section-icon--mint"><AppIcon name="tasks" :size="17" /></span>
-            <AppStatusBadge v-if="selectedRun" :status="selectedRun.status" size="sm" />
-            <span v-else class="vaults__idle">暂无记录</span>
-          </div>
-          <h2>最近一次索引</h2>
-          <div v-if="selectedRun" class="index-card__run">
-            <p>作业 #{{ selectedRun.id }} · {{ selectedRun.mode }}</p>
-            <strong>{{ relativeTime(selectedRun.started_at) || '时间未知' }}</strong>
-            <AppProgress v-if="selectedRunActive" :run="selectedRun" compact />
-            <p v-else class="index-card__summary">该作业已结束，可在任务页查看处理统计与详情。</p>
-          </div>
-          <p v-else class="index-card__empty">尚未运行索引任务。提交同步后，进度和结果会显示在这里。</p>
-          <AppButton
-            class="index-card__action"
-            variant="primary"
-            icon="tasks"
-            @click="router.push({ name: 'tasks', query: { vault_id: String(selectedVault.id), ...(selectedRun ? { run_id: String(selectedRun.id) } : {}) } })"
-          >
-            {{ selectedRun ? '查看任务详情' : '查看任务记录' }}
-          </AppButton>
-        </section>
-
-        <section class="privacy-card">
+        <VaultFilesPanel
+          v-if="selectedVault"
+          :vault="selectedVault"
+          :files="vaultFileItems"
+          :counts="vaultFileCounts"
+          :total="vaultFileTotal"
+          :page="vaultFilePage"
+          :page-size="vaultFilePageSize"
+          :search="vaultFileSearch"
+          :status="vaultFileStatus"
+          :loading="vaultFilesLoading"
+          :error="vaultFilesError"
+          :scan-complete="vaultFilesScanComplete"
+          :run="selectedRun"
+          :active-run="activeOf(selectedVault)"
+          :filter-summary="filterSummary(selectedVault)"
+          :embed-summary="embedSummary(selectedVault)"
+          @update:search="vaultFileSearch = $event; vaultFilePage = 1"
+          @update:status="vaultFileStatus = $event; vaultFilePage = 1"
+          @change-page="vaultFilePage = $event"
+          @sync="submit(selectedVault.id, { mode: 'sync' })"
+          @preview="submit(selectedVault.id, { mode: 'sync', dry_run: true })"
+          @rebuild="reindex(selectedVault.id)"
+          @edit-filters="openEdit"
+          @remove="askRemove"
+          @update-files="openUpdate"
+          @refresh="refreshVaultFiles"
+        />
+        <section v-if="selectedVault" class="privacy-card">
           <span class="privacy-card__mark"><AppIcon name="info" :size="17" /></span>
           <div><strong>文件保持在原位置</strong><p>服务器目录直接索引；上传文件夹保留在服务器副本中。</p></div>
         </section>
-      </aside>
+      </div>
     </div>
 
     <!-- 添加 / 上传 / 更新（同一张表单，来源类型由入口决定，弹窗内不再选） -->
@@ -1013,71 +927,6 @@ async function doRemove() {
   min-width: 0;
 }
 
-.vaults__card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.vaults__name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-primary);
-  font-size: var(--font-size-h2);
-  line-height: var(--line-height-h2);
-  font-weight: var(--font-weight-semibold);
-}
-
-.vaults__idle {
-  flex: none;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-sm);
-}
-
-.vaults__meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-sm);
-}
-
-.vaults__meta-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.vaults__active {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding-top: var(--space-1);
-  border-top: var(--border-width) solid var(--color-border);
-}
-
-.vaults__active-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-1);
-}
-
-.vaults__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  width: 100%;
-}
-
 .vaults__card-new {
   display: flex;
   align-items: center;
@@ -1169,13 +1018,12 @@ async function doRemove() {
 
 .vault-page-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.65fr) minmax(250px, 0.8fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   align-items: start;
 }
 
-.vault-main-column,
-.vault-side-column {
+.vault-main-column {
   display: grid;
   gap: 15px;
   min-width: 0;
@@ -1213,223 +1061,30 @@ async function doRemove() {
 
 .vault-cards {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, 260px);
   gap: 10px;
 }
 
-.vault-card {
-  min-width: 0;
-  padding: 0;
-  border-color: var(--ui-border);
-}
-
-.vault-card.is-selected {
-  border-color: var(--ui-primary);
-  box-shadow: 0 0 0 2px var(--ui-primary-soft);
-}
-
-.vault-card :deep(.app-card__body) {
-  gap: 9px;
-  padding: 12px;
-}
-
-.vault-card :deep(.app-card__footer) {
-  padding: 9px 12px;
-  border-top-color: var(--ui-border);
-}
-
-.vault-card__select {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 0;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-}
-
-.vault-card__icon,
-.section-icon {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  flex: none;
-  place-items: center;
-  color: var(--ui-primary);
-  background: var(--ui-primary-soft);
-  border-radius: 10px;
-}
-
-.vault-card__copy {
-  display: grid;
-  flex: 1;
-  gap: 3px;
-  min-width: 0;
-}
-
-.vault-card__copy strong {
-  overflow: hidden;
-  color: var(--ui-ink);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.vault-card__copy small {
-  color: var(--ui-muted);
-  font-size: 9px;
-}
-
-.vault-card__check {
-  width: 20px;
-  height: 20px;
-  display: grid;
-  flex: none;
-  place-items: center;
-  color: var(--color-primary-contrast);
-  background: var(--ui-primary);
-  border-radius: 50%;
-}
-
-.vaults__meta {
-  color: var(--ui-muted);
-  font-size: 9px;
-}
-
-.vaults__meta :deep(svg) {
-  color: var(--ui-primary);
-}
-
-.vaults__active {
-  gap: 7px;
-  padding-top: 9px;
-  border-top-color: var(--ui-border);
-}
-
-.vaults__actions {
-  justify-content: flex-start;
-  gap: 5px;
-}
-
-.files-panel {
-  padding: 16px;
-}
-
-.files-panel__heading,
-.files-panel__title {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.files-panel__heading {
-  justify-content: space-between;
-}
-
-.files-panel__title > div {
-  min-width: 0;
-}
-
-.files-panel__title h2 {
-  overflow: hidden;
-  color: var(--ui-ink);
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.files-panel__title p {
-  margin-top: 3px;
-  color: var(--ui-muted);
-  font-size: 9px;
-}
-
-.vault-details {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 18px;
-  padding: 16px 0;
-}
-
-.vault-details > div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.vault-details small {
-  color: var(--ui-muted);
-  font-size: 8px;
-}
-
-.vault-details span {
-  overflow-wrap: anywhere;
-  color: var(--ui-text);
-  font-size: 9px;
-}
-
-.vault-details__filters {
-  grid-column: 1 / -1;
-}
-
-.vault-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding-top: 10px;
-  border-top: 1px solid var(--ui-border);
-}
-
-.index-card {
-  padding: 16px;
-}
-
-.index-card__top {
+.vault-list__heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 11px;
 }
 
-.section-icon--mint {
-  color: var(--ui-success);
+.vault-list__heading h2 {
+  color: var(--ui-ink);
+  font-size: 14px;
+}
+
+.vault-list__heading > span {
+  padding: 4px 8px;
+  color: var(--ui-muted);
   background: var(--ui-surface-soft);
-}
-
-.index-card h2 {
-  margin-top: 14px;
-  color: var(--ui-ink);
-  font-size: 13px;
-}
-
-.index-card__run {
-  display: grid;
-  gap: 8px;
-  margin-top: 5px;
-}
-
-.index-card__run p,
-.index-card__summary,
-.index-card__empty {
-  margin: 0;
-  color: var(--ui-muted);
-  font-size: 9px;
-  line-height: 15px;
-}
-
-.index-card__run > strong {
-  color: var(--ui-ink);
-  font-size: 13px;
-}
-
-.index-card__empty {
-  margin-top: 8px;
-}
-
-.index-card__action {
-  width: 100%;
-  margin-top: 14px;
+  border-radius: 999px;
+  font-size: 10px;
+  white-space: nowrap;
 }
 
 .privacy-card {
@@ -1463,9 +1118,6 @@ async function doRemove() {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .vault-side-column {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 650px) {
@@ -1489,14 +1141,8 @@ async function doRemove() {
     grid-column: 1 / -1;
   }
 
-  .vault-cards,
-  .vault-side-column,
-  .vault-details {
+  .vault-cards {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .vault-details__filters {
-    grid-column: auto;
   }
 }
 </style>

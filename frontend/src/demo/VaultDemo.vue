@@ -1,6 +1,21 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import AppIcon from '../components/AppIcon.vue'
+
+const FILE_PAGE_SIZE = 20
+const FILE_STATUSES = [
+  { id: 'all', label: '全部' },
+  { id: 'indexed', label: '索引完成' },
+  { id: 'indexing', label: '索引中' },
+  { id: 'pending', label: '待索引' },
+  { id: 'error', label: '错误' },
+]
+const FILE_STATUS_LABELS = {
+  indexed: '索引完成',
+  indexing: '索引中',
+  pending: '待索引',
+  error: '错误',
+}
 
 const props = defineProps({
   vaults: { type: Array, required: true },
@@ -18,6 +33,8 @@ const treeRules = [
   { label: 'Python 环境', value: '.venv/**' },
 ]
 const query = ref('')
+const fileStatusFilter = ref('all')
+const filePage = ref(1)
 const addOpen = ref(false)
 const editOpen = ref(false)
 const deleteTarget = ref(null)
@@ -31,12 +48,42 @@ const editForm = ref({ exclude: '', maxKb: 10240 })
 const selectedVault = computed(
   () => props.vaults.find((vault) => vault.id === props.selectedVaultId) || props.vaults[0],
 )
-const visibleFiles = computed(() => {
-  const files = selectedVault.value?.files || []
+const files = computed(() => selectedVault.value?.files || [])
+const fileStatusCounts = computed(() =>
+  files.value.reduce(
+    (counts, file) => ({ ...counts, [file.status]: (counts[file.status] || 0) + 1 }),
+    {},
+  ),
+)
+const filteredFiles = computed(() => {
   const term = query.value.trim().toLocaleLowerCase()
-  return files.filter((file) => !term || `${file.name} ${file.path}`.toLocaleLowerCase().includes(term))
+  return files.value.filter((file) => {
+    const matchesText = !term || `${file.name} ${file.path}`.toLocaleLowerCase().includes(term)
+    const matchesStatus = fileStatusFilter.value === 'all' || file.status === fileStatusFilter.value
+    return matchesText && matchesStatus
+  })
 })
+const filePageCount = computed(() => Math.max(1, Math.ceil(filteredFiles.value.length / FILE_PAGE_SIZE)))
+const pageFiles = computed(() => {
+  const start = (filePage.value - 1) * FILE_PAGE_SIZE
+  return filteredFiles.value.slice(start, start + FILE_PAGE_SIZE)
+})
+const fileRangeStart = computed(() => (filteredFiles.value.length ? (filePage.value - 1) * FILE_PAGE_SIZE + 1 : 0))
+const fileRangeEnd = computed(() => Math.min(filePage.value * FILE_PAGE_SIZE, filteredFiles.value.length))
 const progressLabel = computed(() => `${props.indexProgress}%`)
+
+watch([query, fileStatusFilter], () => {
+  filePage.value = 1
+})
+
+watch(
+  () => props.selectedVaultId,
+  () => {
+    query.value = ''
+    fileStatusFilter.value = 'all'
+    filePage.value = 1
+  },
+)
 
 function blankForm() {
   return { name: '', path: '', exclude: defaultRules.join('\n'), maxKb: 10240 }
@@ -148,7 +195,7 @@ function beginIndex(mode) {
     <div class="vault-main-column">
       <section class="vault-list-section">
         <div class="section-heading">
-          <div><h2>我的知识库</h2><p>每个 Vault 独立维护文件、过滤规则与索引</p></div>
+          <div><h2>我的知识库</h2></div>
           <span class="count-chip">{{ vaults.length }} 个 Vault</span>
         </div>
         <div class="vault-cards">
@@ -169,11 +216,16 @@ function beginIndex(mode) {
             <div class="vault-card__stats">
               <span><strong>{{ vault.fileCount }}</strong> 个文件</span>
               <span><strong>{{ vault.fragmentCount }}</strong> 个片段</span>
-              <span class="status-pill status-pill--success"><span></span>{{ vault.indexedAt === '尚未索引' ? '待索引' : '已就绪' }}</span>
+              <span
+                class="status-pill"
+                :class="vault.indexedAt === '尚未索引' ? 'status-pill--pending' : 'status-pill--success'"
+              >
+                <span></span>{{ vault.indexedAt === '尚未索引' ? '待索引' : '已就绪' }}
+              </span>
             </div>
             <p class="vault-card__path" :title="vault.sourceValue">
               <AppIcon :name="vault.sourceType === 'uploaded' ? 'upload' : 'folder'" :size="13" />
-              {{ vault.sourceValue }}
+              <span>{{ vault.sourceValue }}</span>
             </p>
           </article>
         </div>
@@ -183,59 +235,101 @@ function beginIndex(mode) {
         <div class="files-panel__heading">
           <div class="files-panel__title">
             <span class="section-icon"><AppIcon name="folder" :size="18" /></span>
-            <div><h2>{{ selectedVault.name }}</h2><p>文件与索引内容</p></div>
+            <div><h2>{{ selectedVault.name }}</h2><p>{{ files.length }} 个文件 · 文件状态与索引进度</p></div>
+          </div>
+          <section class="recent-sync-card" aria-label="最近一次同步进度">
+            <div class="recent-sync-card__top">
+              <span class="recent-sync-card__title"><AppIcon name="refresh" :size="14" />最近一次同步</span>
+              <span class="status-pill status-pill--running"><span></span>进行中</span>
+              <strong class="recent-sync-card__percent">{{ progressLabel }}</strong>
+            </div>
+            <div class="recent-sync-card__track" role="progressbar" :aria-valuenow="indexProgress" aria-valuemin="0" aria-valuemax="100" aria-label="同步进度">
+              <span :style="{ width: progressLabel }"></span>
+            </div>
+            <ol class="sync-stages" aria-label="同步阶段">
+              <li class="is-done"><span class="sync-stages__mark"><AppIcon name="check" :size="10" /></span><span>扫描文件</span></li>
+              <li class="is-active" aria-current="step"><span class="sync-stages__mark"><AppIcon name="zap" :size="10" /></span><span>解析与分块</span></li>
+              <li><span class="sync-stages__mark">3</span><span>写入索引</span></li>
+            </ol>
+          </section>
+        </div>
+        <div class="vault-actions">
+          <div class="vault-actions__buttons">
+            <button v-if="selectedVault.sourceType === 'uploaded'" class="button button--secondary" type="button" @click="openUpdate(selectedVault)">
+              <AppIcon name="upload" :size="15" />更新文件
+            </button>
+            <template v-else>
+              <button class="button button--secondary" type="button" @click="beginIndex('sync')"><AppIcon name="refresh" :size="15" />同步</button>
+              <button class="button button--secondary" type="button" @click="beginIndex('preview')">预览变更</button>
+            </template>
+            <button class="button button--secondary" type="button" @click="beginIndex('rebuild')"><AppIcon name="zap" :size="15" />重建索引</button>
+            <button class="button button--quiet" type="button" @click="openFilters(selectedVault)"><AppIcon name="filter" :size="15" />过滤设置</button>
+            <button class="button button--danger-quiet" type="button" @click="deleteTarget = selectedVault"><AppIcon name="trash" :size="15" />删除</button>
+          </div>
+        </div>
+        <div class="files-panel__meta">
+          <span><AppIcon name="clock" :size="14" />上次索引：{{ selectedVault.indexedAt }}</span>
+          <span><AppIcon name="filter" :size="14" />排除 {{ selectedVault.filters?.exclude?.length || 0 }} 项 · 单文件 ≤ {{ selectedVault.filters?.maxKb || 0 }} KB</span>
+        </div>
+        <div class="files-controls">
+          <div class="file-status-filters" role="group" aria-label="按索引状态筛选文件">
+            <button
+              v-for="status in FILE_STATUSES"
+              :key="status.id"
+              type="button"
+              class="file-status-filter"
+              :class="{ 'is-active': fileStatusFilter === status.id, [`is-${status.id}`]: status.id !== 'all' }"
+              :aria-pressed="fileStatusFilter === status.id"
+              @click="fileStatusFilter = status.id"
+            >
+              <span v-if="status.id !== 'all'" class="file-status-filter__dot"></span>
+              {{ status.label }}
+              <span class="file-status-filter__count">{{ status.id === 'all' ? files.length : fileStatusCounts[status.id] || 0 }}</span>
+            </button>
           </div>
           <label class="file-search">
             <AppIcon name="search" :size="15" />
             <input v-model="query" type="search" placeholder="搜索文件" aria-label="搜索文件" />
           </label>
         </div>
-        <div class="files-panel__meta">
-          <span><AppIcon name="clock" :size="14" />上次索引：{{ selectedVault.indexedAt }}</span>
-          <span><AppIcon name="filter" :size="14" />排除 {{ selectedVault.filters?.exclude?.length || 0 }} 项 · 单文件 ≤ {{ selectedVault.filters?.maxKb || 0 }} KB</span>
-        </div>
-        <div v-if="visibleFiles.length" class="file-list">
-          <button v-for="file in visibleFiles" :key="file.name" type="button" class="file-row" @click="emit('notify', `已选择 ${file.name}（示例文件）`)">
+        <div v-if="pageFiles.length" class="file-list" aria-live="polite">
+          <button
+            v-for="file in pageFiles"
+            :key="`${file.path}/${file.name}`"
+            type="button"
+            class="file-row"
+            @click="emit('notify', `已选择 ${file.name}（示例文件）`)"
+          >
             <span class="file-row__icon" :class="`is-${file.kind}`"><AppIcon name="file-text" :size="18" /></span>
             <span class="file-row__name"><strong>{{ file.name }}</strong><small>{{ file.path }}</small></span>
             <span class="file-row__updated">{{ file.updated }}</span>
             <span class="file-row__size">{{ file.size }}</span>
+            <span class="file-status" :class="`file-status--${file.status}`">
+              <span class="file-status__dot"></span>{{ FILE_STATUS_LABELS[file.status] || '待索引' }}
+            </span>
             <AppIcon name="chevron-right" :size="16" />
           </button>
         </div>
-        <div v-else class="file-empty">当前 Vault 暂无示例文件，开始同步后会显示文件清单。</div>
-        <div class="vault-actions">
-          <button v-if="selectedVault.sourceType === 'uploaded'" class="button button--secondary" type="button" @click="openUpdate(selectedVault)">
-            <AppIcon name="upload" :size="15" />更新文件
-          </button>
-          <template v-else>
-            <button class="button button--secondary" type="button" @click="beginIndex('sync')"><AppIcon name="refresh" :size="15" />同步</button>
-            <button class="button button--secondary" type="button" @click="beginIndex('preview')">预览变更</button>
-          </template>
-          <button class="button button--secondary" type="button" @click="beginIndex('rebuild')"><AppIcon name="zap" :size="15" />重建索引</button>
-          <button class="button button--quiet" type="button" @click="openFilters(selectedVault)"><AppIcon name="filter" :size="15" />过滤设置</button>
-          <button class="button button--danger-quiet" type="button" @click="deleteTarget = selectedVault"><AppIcon name="trash" :size="15" />删除</button>
+        <div v-else class="file-empty">
+          {{ files.length ? '没有符合当前搜索和状态筛选的文件。' : '当前 Vault 暂无演示文件，开始同步后会显示文件清单。' }}
         </div>
+        <nav v-if="filePageCount > 1" class="file-pagination" aria-label="文件列表分页">
+          <span>显示 {{ fileRangeStart }}–{{ fileRangeEnd }} 项，共 {{ filteredFiles.length }} 项</span>
+          <div class="file-pagination__controls">
+            <button type="button" :disabled="filePage === 1" @click="filePage -= 1">
+              <AppIcon name="chevron-left" :size="14" />上一页
+            </button>
+            <span>第 {{ filePage }} / {{ filePageCount }} 页</span>
+            <button type="button" :disabled="filePage === filePageCount" @click="filePage += 1">
+              下一页<AppIcon name="chevron-right" :size="14" />
+            </button>
+          </div>
+        </nav>
       </section>
 
       <div class="vault-tip"><AppIcon name="info" :size="15" /><span>服务器目录路径指服务端机器；上传方式才会从当前电脑选择文件夹。过滤规则只配置要排除的内容。</span></div>
-    </div>
-
-    <aside class="vault-side-column">
-      <section class="panel index-card">
-        <div class="index-card__top"><span class="section-icon section-icon--mint"><AppIcon name="tasks" :size="18" /></span><span class="status-pill status-pill--running"><span></span>索引任务</span></div>
-        <h2>最近一次同步</h2>
-        <div class="index-card__progress-line"><strong>{{ progressLabel }}</strong><span>本次处理进度</span></div>
-        <div class="progress-track" role="progressbar" :aria-valuenow="indexProgress" aria-valuemin="0" aria-valuemax="100" aria-label="索引进度"><span :style="{ width: progressLabel }"></span></div>
-        <div class="index-stages">
-          <div class="index-stage is-done"><span class="index-stage__mark"><AppIcon name="check" :size="12" /></span><span class="index-stage__copy"><strong>读取文件</strong><small>4 个文件已扫描</small></span><span class="index-stage__value">完成</span></div>
-          <div class="index-stage is-active"><span class="index-stage__mark"><AppIcon name="zap" :size="12" /></span><span class="index-stage__copy"><strong>切片与向量化</strong><small>语义分段处理中</small></span><span class="index-stage__value">进行中</span></div>
-          <div class="index-stage"><span class="index-stage__mark"><AppIcon name="inbox" :size="12" /></span><span class="index-stage__copy"><strong>写入索引</strong><small>等待上一步完成</small></span></div>
-        </div>
-        <button class="button button--primary index-card__action" type="button" @click="beginIndex('sync')"><AppIcon name="play" :size="15" />查看任务进度</button>
-      </section>
       <section class="privacy-card"><span class="privacy-card__mark"><AppIcon name="check" :size="15" /></span><div><strong>你的笔记，仍在本地</strong><p>演示不会读取或上传任何文件。</p></div></section>
-    </aside>
+    </div>
   </div>
 
   <div v-if="addOpen" class="dialog-backdrop" @click.self="addOpen = false">
@@ -307,14 +401,14 @@ function beginIndex(mode) {
 .button--quiet, .button--danger-quiet { color: var(--ui-primary); background: transparent; }
 .button--danger-quiet { color: var(--ui-danger); }
 .button--danger { color: var(--color-danger-contrast); background: var(--ui-danger); }
-.vault-page-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(260px, .8fr); gap: 18px; align-items: start; }
-.vault-main-column, .vault-side-column { display: grid; gap: 15px; min-width: 0; }
+.vault-page-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
+.vault-main-column { display: grid; gap: 15px; min-width: 0; }
 .section-heading, .files-panel__heading, .files-panel__title, .vault-card__select, .vault-card__stats, .vault-actions { display: flex; align-items: center; }
 .section-heading { justify-content: space-between; gap: 10px; margin-bottom: 11px; }
-.section-heading h2, .files-panel h2, .index-card h2 { color: var(--ui-ink); font-size: 14px; }
-.section-heading p, .files-panel__title p { margin-top: 3px; color: var(--ui-muted); font-size: 10px; }
+.section-heading h2, .files-panel h2 { color: var(--ui-ink); font-size: 14px; }
+.files-panel__title p { margin-top: 3px; color: var(--ui-muted); font-size: 10px; }
 .count-chip { padding: 4px 8px; color: var(--ui-muted); background: var(--ui-surface-soft); border-radius: 999px; font-size: 10px; white-space: nowrap; }
-.vault-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.vault-cards { display: grid; grid-template-columns: repeat(auto-fill, 260px); gap: 10px; }
 .vault-card { min-width: 0; padding: 12px; border-color: var(--ui-border); }
 .vault-card.is-selected { border-color: var(--ui-primary); box-shadow: 0 0 0 2px var(--ui-primary-soft); }
 .vault-card__select { width: 100%; gap: 9px; padding: 0; text-align: left; background: transparent; border: 0; cursor: pointer; }
@@ -325,19 +419,33 @@ function beginIndex(mode) {
 .vault-card__check { width: 20px; height: 20px; display: grid; place-items: center; color: var(--color-primary-contrast); background: var(--ui-primary); border-radius: 50%; }
 .vault-card__stats { flex-wrap: wrap; gap: 8px; margin-top: 12px; color: var(--ui-muted); font-size: 9px; }
 .vault-card__stats strong { color: var(--ui-ink); }
-.vault-card__path { overflow: hidden; display: flex; align-items: center; gap: 5px; margin-top: 9px; color: var(--ui-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.vault-card__path { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; margin-top: 9px; color: var(--ui-muted); font-size: 9px; }
+.vault-card__path > :deep(svg) { flex: none; }
+.vault-card__path > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-pill { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border-radius: 999px; font-size: 9px; font-weight: 600; white-space: nowrap; }
 .status-pill > span { width: 5px; height: 5px; background: currentColor; border-radius: 50%; }
-.status-pill--success { color: var(--ui-success); background: var(--ui-surface-soft); }
-.status-pill--running { color: var(--ui-info); background: var(--ui-primary-soft); }
-.files-panel { padding: 17px 18px 0; }
-.files-panel__heading { justify-content: space-between; gap: 10px; }
-.files-panel__title { gap: 9px; }
+.status-pill--success { color: var(--ui-success); background: var(--color-success-soft); }
+.status-pill--running { color: var(--ui-info); background: var(--color-info-soft); }
+.status-pill--pending { color: var(--ui-warning); background: var(--color-warning-soft); }
+.files-panel { overflow: hidden; padding: 17px 18px 0; }
+.files-panel__heading { align-items: stretch; justify-content: space-between; gap: 18px; }
+.files-panel__title { flex: 1 1 auto; gap: 9px; align-self: center; }
 .files-panel__title h2 { font-size: 13px; }
-.file-search { height: 34px; display: flex; align-items: center; gap: 6px; padding: 0 9px; color: var(--ui-muted); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 8px; }
-.file-search input { width: 110px; min-width: 0; color: var(--ui-text); background: transparent; border: 0; outline: 0; font-size: 10px; }
+.file-search { width: 190px; height: 34px; display: flex; flex: none; align-items: center; gap: 6px; padding: 0 9px; color: var(--ui-muted); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 8px; }
+.file-search input { width: 100%; min-width: 0; color: var(--ui-text); background: transparent; border: 0; outline: 0; font-size: 10px; }
 .files-panel__meta { display: flex; flex-wrap: wrap; gap: 12px; margin: 13px 0 5px; color: var(--ui-muted); font-size: 9px; }
 .files-panel__meta span { display: flex; align-items: center; gap: 5px; }
+.files-controls { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0 4px; }
+.file-status-filters { display: flex; flex: 1 1 auto; gap: 5px; overflow-x: auto; min-width: 0; padding-bottom: 4px; scrollbar-width: thin; }
+.file-status-filter { min-height: 29px; display: inline-flex; flex: none; align-items: center; gap: 6px; padding: 0 8px; color: var(--ui-muted); background: transparent; border: 1px solid transparent; border-radius: 7px; font-size: 9px; cursor: pointer; }
+.file-status-filter:hover { background: var(--ui-surface-soft); }
+.file-status-filter.is-active { color: var(--ui-primary); background: var(--ui-primary-soft); border-color: var(--ui-border); }
+.file-status-filter__dot, .file-status__dot { width: 6px; height: 6px; flex: none; background: currentColor; border-radius: 50%; }
+.file-status-filter__count { color: inherit; opacity: .8; font-variant-numeric: tabular-nums; }
+.file-status-filter.is-indexed { color: var(--ui-success); }
+.file-status-filter.is-indexing { color: var(--ui-info); }
+.file-status-filter.is-pending { color: var(--ui-warning); }
+.file-status-filter.is-error { color: var(--ui-danger); }
 .file-row { width: 100%; min-height: 54px; display: flex; align-items: center; gap: 9px; padding: 6px 2px; text-align: left; color: var(--ui-muted); background: transparent; border: 0; border-bottom: 1px solid var(--ui-border); cursor: pointer; }
 .file-row:hover { background: var(--ui-surface-soft); }
 .file-row__icon { width: 30px; height: 33px; display: grid; flex: none; place-items: center; color: var(--ui-primary); background: var(--ui-primary-soft); border-radius: 8px; }
@@ -347,31 +455,39 @@ function beginIndex(mode) {
 .file-row__name small, .file-row__updated, .file-row__size { color: var(--ui-muted); font-size: 9px; }
 .file-row__updated { min-width: 70px; }
 .file-row__size { min-width: 43px; text-align: right; }
+.file-status { min-width: 68px; display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 5px; padding: 4px 7px; border-radius: 999px; font-size: 8px; font-weight: 600; white-space: nowrap; }
+.file-status--indexed { color: var(--ui-success); background: var(--color-success-soft); }
+.file-status--indexing { color: var(--ui-info); background: var(--color-info-soft); }
+.file-status--pending { color: var(--ui-warning); background: var(--color-warning-soft); }
+.file-status--error { color: var(--ui-danger); background: var(--color-danger-soft); }
+.file-pagination { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 2px; border-bottom: 1px solid var(--ui-border); color: var(--ui-muted); font-size: 9px; }
+.file-pagination__controls { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.file-pagination__controls button { min-height: 30px; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; color: var(--ui-text); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 7px; font-size: 9px; cursor: pointer; }
+.file-pagination__controls button:hover:not(:disabled) { background: var(--ui-surface-soft); }
+.file-pagination__controls button:disabled { color: var(--ui-muted); opacity: .55; cursor: default; }
 .file-empty { padding: 25px 8px; color: var(--ui-muted); text-align: center; font-size: 11px; }
-.vault-actions { flex-wrap: wrap; gap: 6px; padding: 11px 0; border-top: 1px solid var(--ui-border); }
-.vault-actions .button { min-height: 32px; padding: 0 8px; font-size: 9px; }
+.vault-actions { justify-content: flex-start; flex-wrap: wrap; gap: 10px 14px; padding: 10px 0 0; }
+.vault-actions__buttons { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.vault-actions__buttons .button { min-height: 32px; padding: 0 8px; font-size: 9px; }
+.recent-sync-card { width: min(100%, 410px); min-height: 106px; display: grid; flex: 0 1 410px; align-content: center; gap: 9px; padding: 11px 13px; color: var(--ui-text); background: var(--ui-surface-soft); border: 1px solid var(--ui-border); border-radius: 10px; }
+.recent-sync-card__top, .recent-sync-card__title { display: flex; align-items: center; }
+.recent-sync-card__top { gap: 9px; }
+.recent-sync-card__title { gap: 5px; color: var(--ui-ink); font-size: 9px; font-weight: 700; }
+.recent-sync-card__title :deep(svg) { color: var(--ui-primary); }
+.recent-sync-card .status-pill { padding: 3px 6px; font-size: 8px; }
+.recent-sync-card__percent { margin-left: auto; color: var(--ui-primary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.recent-sync-card__track { height: 4px; overflow: hidden; background: var(--ui-border); border-radius: 99px; }
+.recent-sync-card__track > span { display: block; height: 100%; background: var(--ui-info); border-radius: inherit; transition: width .3s ease; }
+.sync-stages { display: flex; align-items: center; margin: 0; padding: 0; list-style: none; }
+.sync-stages li { position: relative; display: flex; flex: 1 1 0; align-items: center; gap: 5px; min-width: 0; color: var(--ui-muted); font-size: 8px; white-space: nowrap; }
+.sync-stages li:not(:last-child)::after { height: 1px; flex: 1 1 auto; min-width: 8px; margin: 0 6px; content: ''; background: var(--ui-border); }
+.sync-stages__mark { width: 17px; height: 17px; display: grid; flex: none; place-items: center; color: var(--ui-muted); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 50%; font-size: 8px; }
+.sync-stages li.is-done { color: var(--ui-success); }
+.sync-stages li.is-done .sync-stages__mark { color: var(--color-success-contrast); background: var(--ui-success); border-color: var(--ui-success); }
+.sync-stages li.is-active { color: var(--ui-info); font-weight: 700; }
+.sync-stages li.is-active .sync-stages__mark { color: var(--color-info-contrast); background: var(--ui-info); border-color: var(--ui-info); }
 .vault-tip { display: flex; align-items: flex-start; gap: 7px; color: var(--ui-muted); font-size: 9px; line-height: 15px; }
 .vault-tip :deep(svg) { flex: none; color: var(--ui-primary); }
-.index-card { padding: 17px; }
-.index-card__top { display: flex; align-items: center; justify-content: space-between; }
-.section-icon--mint { color: var(--ui-success); background: var(--ui-surface-soft); }
-.index-card h2 { margin-top: 15px; }
-.index-card__progress-line { display: flex; align-items: baseline; gap: 8px; margin-top: 5px; }
-.index-card__progress-line strong { color: var(--ui-ink); font-size: 26px; }
-.index-card__progress-line span { color: var(--ui-muted); font-size: 10px; }
-.progress-track { height: 7px; overflow: hidden; margin-top: 9px; background: var(--ui-surface-soft); border-radius: 9px; }
-.progress-track span { display: block; height: 100%; background: var(--ui-success); border-radius: inherit; transition: width .3s ease; }
-.index-stages { display: grid; margin-top: 14px; }
-.index-stage { min-height: 51px; position: relative; display: flex; align-items: center; gap: 8px; }
-.index-stage:not(:last-child)::after { position: absolute; top: 35px; bottom: 0; left: 10px; width: 1px; content: ''; background: var(--ui-border); }
-.index-stage__mark { z-index: 1; width: 22px; height: 22px; display: grid; flex: none; place-items: center; color: var(--ui-muted); background: var(--ui-surface-soft); border-radius: 50%; }
-.index-stage.is-done .index-stage__mark { color: var(--color-success-contrast); background: var(--ui-success); }
-.index-stage.is-active .index-stage__mark { color: var(--color-info-contrast); background: var(--ui-info); }
-.index-stage__copy { display: grid; flex: 1; gap: 2px; }
-.index-stage__copy strong { color: var(--ui-text); font-size: 10px; }
-.index-stage__copy small, .index-stage__value { color: var(--ui-muted); font-size: 9px; }
-.index-stage__value { color: var(--ui-success); }
-.index-card__action { width: 100%; margin-top: 12px; }
 .privacy-card { display: flex; align-items: center; gap: 9px; padding: 12px; background: var(--ui-surface-soft); border: 1px solid var(--ui-border); border-radius: 10px; }
 .privacy-card__mark { color: var(--ui-success); }
 .privacy-card strong { color: var(--ui-ink); font-size: 10px; }
@@ -408,18 +524,22 @@ function beginIndex(mode) {
 .filter-tree code { grid-column: 2; overflow: hidden; color: var(--ui-muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .form-error { margin: 0; color: var(--ui-danger); font-size: 10px; }
 .dialog-card__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 17px; }
-@media (max-width: 1000px) {
-  .vault-page-grid { grid-template-columns: minmax(0, 1fr); }
-  .vault-side-column { grid-row: 1; grid-template-columns: minmax(0, 1fr) minmax(180px, .8fr); }
-}
 @media (max-width: 650px) {
   .vault-intro__actions { width: 100%; }
   .vault-intro__actions .button { flex: 1; padding: 0 7px; font-size: 9px; }
   .vault-cards { grid-template-columns: minmax(0, 1fr); }
-  .vault-side-column { grid-template-columns: minmax(0, 1fr); }
   .file-row__updated, .file-row__size { display: none; }
   .files-panel { padding-right: 12px; padding-left: 12px; }
+  .files-panel__heading { flex-direction: column; }
+  .files-panel__title { align-self: auto; }
+  .files-controls { align-items: stretch; flex-direction: column; }
+  .file-status-filters { flex: none; width: 100%; }
+  .file-search { width: 100%; }
+  .file-pagination { align-items: flex-start; flex-direction: column; }
+  .file-pagination__controls { width: 100%; justify-content: space-between; }
+  .vault-actions { align-items: stretch; flex-direction: column; }
+  .recent-sync-card { width: 100%; flex-basis: auto; }
   .filter-tree { grid-template-columns: 1fr; }
 }
-@media (prefers-reduced-motion: reduce) { .button, .progress-track span { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .button, .recent-sync-card__track > span { transition: none; } }
 </style>
