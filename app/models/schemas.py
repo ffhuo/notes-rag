@@ -225,7 +225,9 @@ class SearchRequest(BaseModel):
 class ChunkHit(BaseModel):
     """检索命中的片段。
 
-    rerank_score 是可选的精排分数；score 始终表示向量相似度。
+    score 始终表示向量相似度；bm25_score 是可选的 BM25 分数，
+    fusion_score 是 RRF 排名分，rerank_score 是可选精排分数。
+    BM25 独有命中时 vector_recalled=False，score 仅为兼容旧客户端保留的 0 占位值。
     images 来自 chunk.metadata["images"]（ingest 阶段写入），描述**本片段内含**的图片：
     uid（关联 image_cache 行的溯源依据）/ ref（图片地址：URL 或相对 vault 根的路径）/
     kind（local|remote）/ raw（原始图片语法，供回填）/ alt / offset（片段内偏移）/ model。
@@ -237,6 +239,8 @@ class ChunkHit(BaseModel):
     title: str
     content: str
     score: float
+    bm25_score: float | None = None
+    vector_recalled: bool = True
     rerank_score: float | None = None
     vault_id: int | None = None
     vault_name: str | None = None

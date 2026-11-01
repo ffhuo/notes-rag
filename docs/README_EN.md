@@ -179,7 +179,9 @@ Model configuration lives entirely in the `model_profiles` table — **`.env` no
 
 - **LLM**: stateless — **switchable on every request** (`ChatRequest.llm_profile`, a dropdown on the chat page).
 - **Embedding**: strongly bound to the index — vectors are split into collections by `v{vault}_m{profile}`, so retrieval must use the same model that built the index; switching = reindex that vault (`POST /vaults/{id}/reindex?embed_profile=...`). The API **deliberately does not expose** `SearchRequest.embed_profile`, avoiding the silent failure of "recalls results but all noise".
-- **Reranker**: configure a SiliconFlow or Cohere `kind=rerank` profile and make it the default to rerank Search, Chat, and MCP search candidates automatically. Without a default, vector ranking remains unchanged; failures are logged and fall back to vector order. Candidate count is `min(max(top_k × 4, 20), 100)`, and `score` remains vector similarity while `rerank_score` carries the optional reranker score.
+- **Hybrid retrieval**: Search, Chat, and MCP search use SQLite FTS5 BM25 plus vector retrieval by default, with RRF rank fusion. BM25 uses jieba tokenization for Chinese. Set `BM25_ENABLED=false` in `.env` to disable it.
+- **Retrieval/reranker pool sizes**: Configure `VECTOR_RECALL_*`, `BM25_RECALL_*`, and `RERANK_CANDIDATE_*` in `.env` for vector candidates, BM25 candidates, and reranker input candidates. Defaults are `min(max(top_k × 4, 20), 100)` per candidate pool; `RETRIEVAL_RRF_K=60`. The API still returns at most `top_k` results. Existing chunks are backfilled into FTS on first startup, then updated with sync operations.
+- **Reranker**: configure a SiliconFlow or Cohere `kind=rerank` profile and make it the default to rerank hybrid candidates. Failures are logged and fall back to RRF order. `score` remains vector similarity; optional `bm25_score`, `fusion_score`, and `rerank_score` report the other ranking signals.
 
 See `DESIGN_EN.md` module index M08.
 

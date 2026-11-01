@@ -221,9 +221,13 @@ function resetSearch() {
               <span :title="h.file_path"><AppIcon name="file-text" :size="13" />{{ h.file_path }}</span>
             </div>
             <span class="search-score">
-              <strong>{{ Number(h.rerank_score ?? h.score).toFixed(3) }}</strong>
-              <small>{{ h.rerank_score != null ? '精排分' : '向量分' }}</small>
-              <small v-if="h.rerank_score != null" class="search-score__vector">
+              <strong>{{ Number(h.rerank_score ?? h.fusion_score ?? h.score).toFixed(3) }}</strong>
+              <small>{{ h.rerank_score != null ? '精排分' : h.fusion_score != null ? '混合融合' : '向量分' }}</small>
+              <small v-if="h.bm25_score != null">关键词召回</small>
+              <small
+                v-if="h.vector_recalled && (h.rerank_score != null || h.fusion_score != null)"
+                class="search-score__vector"
+              >
                 向量 {{ Number(h.score).toFixed(3) }}
               </small>
             </span>

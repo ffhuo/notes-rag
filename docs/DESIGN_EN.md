@@ -214,11 +214,13 @@ Progress: GET /vaults/{id}/runs/{rid}   Cancel: POST /vaults/{id}/runs/{rid}/can
 POST /search
   → retrieval_service.retrieve(query, top_k, threshold, vault_id)
   → resolve the vault's effective embedding (vaults.embed_profile_id) → consistency guard
-  → embedder.embed([query]) → vectorstore.query(vector, top_k, threshold)
-  → assemble ChunkHit (note_id / file_path / title / content / score)
+  → parallel recall: vectorstore (semantic) + SQLite FTS5 (jieba-tokenized BM25)
+  → fuse candidate ranks with RRF → optional reranker → return Top-K
+  → assemble ChunkHit with separate score / bm25_score / fusion_score / rerank_score semantics
 ```
 
 **The API deliberately does not expose `embed_profile`** — retrieval must use the model that built the index (see M04 §5.3).
+Candidate pool sizes are configured via `.env` variables `VECTOR_RECALL_*`, `BM25_RECALL_*`, and `RERANK_CANDIDATE_*`. Each defaults to `min(max(top_k × 4, 20), 100)`; `top_k` still controls the final result count. The SQLite FTS index backfills existing chunks on first startup and tracks chunk replacement/deletion and note path/title changes.
 
 ### 5.3 Chat (SSE streaming)
 

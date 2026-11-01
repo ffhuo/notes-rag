@@ -3,7 +3,7 @@
 能力：
 - 将用户查询转为向量（embedder.embed_one）
 - 按 (vault_id, embed_profile_id) 定位向量集合（向量空间与模型强绑定，见 §18.2）
-- 向量库召回候选并按阈值过滤低分噪声；配置默认 reranker 时执行精排
+- 并行执行向量召回与 SQLite FTS5 BM25 召回，按 RRF 融合；可选 reranker 对融合候选精排
 - 组装含来源路径 / 标题 / 分数 / 片段内容 / 片段内图片信息（images）的 ChunkHit 列表
 - **embedding 与 vault 绑定**：embed_profile_id 由调用方按 vault.embed_profile_id 解析，
   并经 model_service.assert_embed_compatible 守卫（见 §18.2），不可由请求随意指定
@@ -16,6 +16,7 @@
 
 关联方案：docs/design.md §5.2（Search 数据流）、§10 模块索引 M04 / M08。
 """
+import asyncio
 import json
 import time
 from dataclasses import dataclass
@@ -23,13 +24,13 @@ from dataclasses import dataclass
 from loguru import logger
 
 from app.core.config import settings
+from app.core.database import session_scope
 from app.models.schemas import ChunkHit, ModelRuntime
 from app.rag.embedder import embed_one
 from app.rag.reranker import rerank as rerank_documents
 from app.rag.vectorstore import VectorStore
+from app.repositories import bm25_repo
 from app.services.model_service import collection_name
-
-_RRF_K = 60
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,35 @@ class VaultRetrievalScope:
     vault_name: str
     embed_profile_id: int | str
     embed_runtime: ModelRuntime
+
+
+@dataclass
+class _RankedCandidate:
+    key: str
+    hit: ChunkHit
+    fusion_score: float = 0.0
+
+
+def _candidate_count(top_k: int, multiplier: int, minimum: int, maximum: int) -> int:
+    return min(max(top_k * multiplier, minimum), maximum)
+
+
+async def _search_bm25(
+    query: str, vault_id: int, limit: int
+) -> list[bm25_repo.Bm25Hit]:
+    started = time.monotonic()
+    try:
+        async with session_scope() as session:
+            return await bm25_repo.search(session, query, vault_id, limit)
+    except Exception as e:
+        logger.warning(
+            "BM25 检索失败，降级为向量召回",
+            vault_id=vault_id,
+            candidates=limit,
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+            error=str(e),
+        )
+        return []
 
 
 async def retrieve(
@@ -64,7 +94,7 @@ async def retrieve(
         rerank_runtime: 可选精排运行时；传入时过召回后重排并返回最终 top_k
 
     Returns:
-        ChunkHit 列表；未配置精排时按向量相似度排序，精排故障时回退该排序
+        ChunkHit 列表；精排故障时记录告警并回退到召回融合顺序
 
     Raises:
         ValueError: 缺少 query / embed_runtime，或 vault_id 与 embed_profile_id 不成对
@@ -75,13 +105,12 @@ async def retrieve(
         raise ValueError("缺少 embed_runtime，无法做语义检索")
     if (vault_id is None) != (embed_profile_id is None):
         raise ValueError("vault_id 与 embed_profile_id 必须成对提供")
+    if top_k <= 0:
+        return []
 
-    # 1) 查询转向量
     query_vector = await embed_one(query, embed_runtime)
 
-    # 2) 定位集合并检索
     if vault_id is None:
-        # 无 vault 上下文：不应发生（索引都按 vault 分集合），直接返回空
         logger.warning("retrieve 未提供 vault_id，跳过向量库检索")
         return []
 
@@ -92,35 +121,117 @@ async def retrieve(
     )
 
     where = {"vault_id": int(vault_id)}
-    rerank_enabled = rerank_runtime is not None and top_k > 0
-    candidate_k = min(max(top_k * 4, 20), 100) if rerank_enabled else top_k
-    raw_hits = await store.query(
+    candidate_k = (
+        _candidate_count(
+            top_k,
+            settings.vector_recall_multiplier,
+            settings.vector_recall_min,
+            settings.vector_recall_max,
+        )
+        if settings.bm25_enabled or rerank_runtime is not None
+        else top_k
+    )
+    vector_query = store.query(
         query_vector,
         top_k=candidate_k,
         threshold=threshold,
         where=where,
     )
+    if settings.bm25_enabled:
+        bm25_limit = _candidate_count(
+            top_k,
+            settings.bm25_recall_multiplier,
+            settings.bm25_recall_min,
+            settings.bm25_recall_max,
+        )
+        raw_hits, bm25_hits = await asyncio.gather(
+            vector_query,
+            _search_bm25(query, int(vault_id), bm25_limit),
+        )
+    else:
+        raw_hits = await vector_query
+        bm25_hits = []
 
-    rerank_scores: list[float] = []
-    rerank_candidate_count = 0
-    rerank_elapsed_ms: int | None = None
-    if rerank_enabled and raw_hits:
-        rerank_candidate_count = len(raw_hits)
+    vector_candidates: list[_RankedCandidate] = []
+    for raw_hit in raw_hits:
+        metadata = raw_hit.get("metadata") or {}
+        vector_candidates.append(
+            _RankedCandidate(
+                key=str(raw_hit.get("id") or (
+                    f"{metadata.get('note_id', '')}:{raw_hit.get('document', '')}"
+                )),
+                hit=ChunkHit(
+                    note_id=str(metadata.get("note_id", "")),
+                    file_path=str(metadata.get("source_file", metadata.get("file_path", ""))),
+                    title=str(metadata.get("title", "")),
+                    content=raw_hit.get("document", ""),
+                    score=float(raw_hit.get("score", 0.0)),
+                    vault_id=int(vault_id),
+                    images=_parse_images(metadata.get("images")),
+                ),
+            )
+        )
+
+    bm25_candidates: list[_RankedCandidate] = []
+    if settings.bm25_enabled:
+        bm25_candidates = [
+            _RankedCandidate(
+                key=hit.vector_id,
+                hit=ChunkHit(
+                    note_id=hit.note_id,
+                    file_path=hit.file_path,
+                    title=hit.title,
+                    content=hit.content,
+                    score=0.0,
+                    bm25_score=hit.score,
+                    vault_id=int(vault_id),
+                    vector_recalled=False,
+                ),
+            )
+            for hit in bm25_hits
+        ]
+    fused_by_key = {candidate.key: candidate for candidate in vector_candidates}
+    if settings.bm25_enabled:
+        for rank, candidate in enumerate(vector_candidates, start=1):
+            candidate.fusion_score += 1 / (settings.retrieval_rrf_k + rank)
+        for rank, candidate in enumerate(bm25_candidates, start=1):
+            existing = fused_by_key.get(candidate.key)
+            if existing is None:
+                existing = candidate
+                fused_by_key[candidate.key] = existing
+            else:
+                existing.hit = existing.hit.model_copy(
+                    update={"bm25_score": candidate.hit.bm25_score}
+                )
+            existing.fusion_score += 1 / (settings.retrieval_rrf_k + rank)
+
+    ranked_candidates = list(fused_by_key.values())
+    if settings.bm25_enabled:
+        ranked_candidates.sort(key=lambda candidate: candidate.fusion_score, reverse=True)
+        for candidate in ranked_candidates:
+            candidate.hit = candidate.hit.model_copy(
+                update={"fusion_score": candidate.fusion_score}
+            )
+
+    if rerank_runtime is not None and ranked_candidates:
+        rerank_limit = _candidate_count(
+            top_k,
+            settings.rerank_candidate_multiplier,
+            settings.rerank_candidate_min,
+            settings.rerank_candidate_max,
+        )
+        rerank_candidates = ranked_candidates[:rerank_limit]
         started = time.monotonic()
         try:
             ranked = await rerank_documents(
                 query,
                 [
-                    (
-                        f"Title: {hit['metadata'].get('title')}\n\n"
-                        if (hit.get("metadata") or {}).get("title")
-                        else ""
-                    )
-                    + str(hit.get("document") or "")
-                    for hit in raw_hits
+                    (f"Title: {candidate.hit.title}\n\n" if candidate.hit.title else "")
+                    + candidate.hit.content
+                    for candidate in rerank_candidates
                 ],
                 rerank_runtime,
-                top_n=min(top_k, len(raw_hits)),
+                top_n=min(top_k, len(rerank_candidates)),
             )
             if not ranked:
                 raise ValueError("reranker returned no ranked candidates")
@@ -132,63 +243,51 @@ async def retrieve(
                     isinstance(index, bool)
                     or not isinstance(index, int)
                     or index < 0
-                    or index >= len(raw_hits)
+                    or index >= len(rerank_candidates)
                     or index in seen
                 ):
                     raise ValueError("reranker returned an invalid candidate index")
                 seen.add(index)
-                reranked_hits.append(raw_hits[index])
-                rerank_scores.append(score)
-            raw_hits = reranked_hits[:top_k]
-            rerank_scores = rerank_scores[:top_k]
+                reranked_hits.append(
+                    rerank_candidates[index].hit.model_copy(
+                        update={"rerank_score": score}
+                    )
+                )
+            hits = reranked_hits[:top_k]
         except Exception as e:
-            rerank_elapsed_ms = int((time.monotonic() - started) * 1000)
             logger.warning(
-                "rerank 失败，降级为向量排序",
+                "rerank 失败，降级为混合召回排序",
                 vault_id=vault_id,
                 profile=rerank_runtime.name,
                 model=rerank_runtime.model,
                 protocol=rerank_runtime.params.get("protocol"),
-                candidates=len(raw_hits),
-                elapsed_ms=rerank_elapsed_ms,
+                candidates=len(rerank_candidates),
+                elapsed_ms=int((time.monotonic() - started) * 1000),
                 error=str(e),
             )
-            rerank_scores = []
-            raw_hits = raw_hits[:top_k]
-        else:
-            rerank_elapsed_ms = int((time.monotonic() - started) * 1000)
-    elif not rerank_enabled:
-        raw_hits = raw_hits[:top_k]
-
-    # 3) 组装 ChunkHit（metadata 由 ingest 阶段写入，缺失字段用默认值兜底）
-    hits: list[ChunkHit] = []
-    for i, h in enumerate(raw_hits):
-        meta = h.get("metadata") or {}
-        hits.append(
-            ChunkHit(
-                note_id=str(meta.get("note_id", "")),
-                file_path=str(meta.get("source_file", meta.get("file_path", ""))),
-                title=str(meta.get("title", "")),
-                content=h.get("document", ""),
-                score=float(h.get("score", 0.0)),
-                images=_parse_images(meta.get("images")),
-                rerank_score=rerank_scores[i] if rerank_scores else None,
-            )
-        )
+            hits = [candidate.hit for candidate in ranked_candidates[:top_k]]
+    else:
+        hits = [candidate.hit for candidate in ranked_candidates[:top_k]]
 
     logger.info(
         "retrieve 完成",
         vault_id=vault_id, collection=coll,
         requested=top_k, returned=len(hits), threshold=threshold,
         model=embed_runtime.model,
+        bm25_enabled=settings.bm25_enabled,
+        vector_candidates=len(vector_candidates),
+        bm25_candidates=len(bm25_candidates),
         reranker=rerank_runtime.model if rerank_runtime is not None else None,
         rerank_protocol=(
             rerank_runtime.params.get("protocol")
             if rerank_runtime is not None
             else None
         ),
-        rerank_candidates=rerank_candidate_count,
-        rerank_elapsed_ms=rerank_elapsed_ms,
+        rerank_candidates=(
+            len(rerank_candidates)
+            if rerank_runtime is not None and ranked_candidates
+            else 0
+        ),
     )
     return hits
 
@@ -219,7 +318,7 @@ async def retrieve_across_vaults(
             rerank_runtime=rerank_runtime,
         )
         for rank, hit in enumerate(vault_hits, start=1):
-            fusion_score = 1 / (_RRF_K + rank)
+            fusion_score = 1 / (settings.retrieval_rrf_k + rank)
             ranked_hits.append(
                 (
                     fusion_score,

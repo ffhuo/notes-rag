@@ -664,12 +664,18 @@ async function openConversation(id) {
                         <span class="chat__source-no">{{ String(si + 1).padStart(2, '0') }}</span>
                         <span class="chat__source-title" :title="s.title">{{ s.title || '（无标题）' }}</span>
                         <span class="chat__score">
-                          {{ Number(s.fusion_score ?? s.rerank_score ?? s.score).toFixed(3) }}
-                          <small>{{ s.fusion_score != null ? '跨库融合' : s.rerank_score != null ? '精排分' : '向量分' }}</small>
-                          <small v-if="s.fusion_score != null && s.rerank_score != null">
+                          {{ Number(s.vault_name != null ? s.fusion_score : s.rerank_score ?? s.fusion_score ?? s.score).toFixed(3) }}
+                          <small>
+                            {{ s.vault_name != null ? '跨库融合' : s.rerank_score != null ? '精排分' : s.fusion_score != null ? '混合融合' : '向量分' }}
+                          </small>
+                          <small v-if="s.bm25_score != null">关键词召回</small>
+                          <small v-if="s.vault_name != null && s.rerank_score != null">
                             精排 {{ Number(s.rerank_score).toFixed(3) }}
                           </small>
-                          <small v-if="s.fusion_score != null || s.rerank_score != null" class="chat__score-vector">
+                          <small
+                            v-if="s.vector_recalled !== false && (s.fusion_score != null || s.rerank_score != null)"
+                            class="chat__score-vector"
+                          >
                             向量 {{ Number(s.score).toFixed(3) }}
                           </small>
                         </span>

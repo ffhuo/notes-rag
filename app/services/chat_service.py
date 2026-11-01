@@ -127,6 +127,8 @@ async def stream(
                 "title": h.title,
                 "content": h.content,
                 "score": h.score,
+                "bm25_score": h.bm25_score,
+                "vector_recalled": h.vector_recalled,
                 "rerank_score": h.rerank_score,
                 "vault_id": h.vault_id,
                 "vault_name": h.vault_name,

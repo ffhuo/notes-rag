@@ -214,11 +214,13 @@ POST /vaults/{id}/sync（或 /ingest?mode=sync）→ 202 { run_id }，随后后�
 POST /search
   → retrieval_service.retrieve(query, top_k, threshold, vault_id)
   → 解析该 vault 生效的 embedding（vaults.embed_profile_id）→ 一致性守卫
-  → embedder.embed([query]) → vectorstore.query(vector, top_k, threshold)
-  → 组装 ChunkHit（note_id / file_path / title / content / score）
+  → 并行召回：vectorstore（向量）+ SQLite FTS5（jieba 分词 BM25）
+  → RRF 按名次融合候选 → 可选 reranker → 返回 Top-K
+  → 组装 ChunkHit（保留 score / bm25_score / fusion_score / rerank_score 的独立语义）
 ```
 
 **接口层故意不暴露 `embed_profile`** —— 检索必须用建索引时那个模型（见 M04 §5.3）。
+候选数量由 `.env` 中 `VECTOR_RECALL_*`、`BM25_RECALL_*` 与 `RERANK_CANDIDATE_*` 控制；默认每路为 `min(max(top_k × 4, 20), 100)`，最终返回条数仍由 `top_k` 决定。FTS 索引在 SQLite 中维护，首次启动回填存量 chunk，后续随 chunk 替换、删除和笔记改名/标题更新。
 
 ### 5.3 Chat（SSE 流式）
 

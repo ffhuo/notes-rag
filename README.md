@@ -180,7 +180,9 @@ vault 完全由前端 / API 运行时配置，**不在 `.env` 中管理**：在�
 
 - **LLM**：无状态耦合，**每次请求都能换**（`ChatRequest.llm_profile`，前端问答页下拉选择）。
 - **Embedding**：与索引强绑定 —— 向量按 `v{vault}_m{profile}` 分集合，检索必须沿用建索引时那个模型；换模型 = 对该 vault 重新索引（`POST /vaults/{id}/reindex?embed_profile=...`）。接口**故意不暴露** `SearchRequest.embed_profile`，避免「能召回但全是噪声」的静默错误。
-- **Reranker**：可配置硅基流动或 Cohere 的 `kind=rerank` profile；设为该类型默认项后，Search、Chat 和 MCP 搜索自动对向量候选做精排。无默认项时保持现有向量排序；调用超时或协议失败时记录告警并降级为向量排序。候选数为 `min(max(top_k × 4, 20), 100)`，最终仍只返回 `top_k` 条；`score` 保持向量相似度，另有可选 `rerank_score`。
+- **混合检索**：Search、Chat 和 MCP 搜索默认使用 SQLite FTS5 BM25 + 向量召回，并通过 RRF 融合排名；BM25 使用 jieba 分词以支持中文。可在 `.env` 设置 `BM25_ENABLED=false` 关闭 BM25。
+- **召回/精排数量**：`.env` 中 `VECTOR_RECALL_*`、`BM25_RECALL_*` 和 `RERANK_CANDIDATE_*` 分别控制向量候选、BM25 候选及送入精排的候选上限。默认每路候选数为 `min(max(top_k × 4, 20), 100)`，RRF 常数 `RETRIEVAL_RRF_K=60`；最终仍只返回 `top_k` 条。旧索引会在首次启动时回填全文索引，之后随同步更新。
+- **Reranker**：可配置硅基流动或 Cohere 的 `kind=rerank` profile；设为该类型默认项后，对混合召回候选精排。调用失败会记录告警并回退到 RRF 排序。`score` 保持向量相似度，另有可选 `bm25_score`、`fusion_score` 和 `rerank_score`。
 
 详见 `docs/design.md` 模块索引 M08。
 

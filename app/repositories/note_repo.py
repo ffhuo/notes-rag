@@ -27,6 +27,7 @@ from sqlalchemy import select, delete as sa_delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Note, Chunk
+from app.repositories import bm25_repo
 
 
 @dataclass
@@ -125,6 +126,8 @@ async def upsert_note(
         )
         session.add(note)
 
+    await session.flush()
+    await bm25_repo.reindex_note(session, note.id)
     await session.commit()
     await session.refresh(note)
     return note
@@ -136,11 +139,13 @@ async def replace_chunks(session: AsyncSession, note_id: int, chunks: list[Chunk
     **不可**改成「按 idx upsert」—— 文件变短时高序号的旧行不会被覆盖，
     会留下检索仍能命中的幽灵内容（M03 ADR-8）。
     """
+    await bm25_repo.delete_for_note(session, note_id)
     await session.execute(
         sa_delete(Chunk).where(Chunk.note_id == note_id)
     )
+    chunk_rows = []
     for rec in chunks:
-        session.add(
+        chunk_rows.append(
             Chunk(
                 user_id=rec.user_id,
                 vault_id=rec.vault_id,
@@ -152,6 +157,17 @@ async def replace_chunks(session: AsyncSession, note_id: int, chunks: list[Chunk
                 vector_id=rec.vector_id,
                 embed_profile_id=rec.embed_profile_id,
             )
+        )
+    session.add_all(chunk_rows)
+    await session.flush()
+    note = await session.get(Note, note_id)
+    if note is not None:
+        await bm25_repo.index_chunks(
+            session,
+            [
+                (chunk.id, note.title, note.file_path, chunk.content)
+                for chunk in chunk_rows
+            ],
         )
     await session.commit()
 
@@ -169,6 +185,7 @@ async def get_note_by_path(session: AsyncSession, vault_id: int, rel_path: str) 
 
 async def delete_note_cascade(session: AsyncSession, note_id: int) -> None:
     """删除笔记：先删其 chunks 行，再删 notes 行（对应向量的清理由 service 层处理）。"""
+    await bm25_repo.delete_for_note(session, note_id)
     await session.execute(
         sa_delete(Chunk).where(Chunk.note_id == note_id)
     )
@@ -185,6 +202,7 @@ async def delete_chunks_by_note(session: AsyncSession, note_id: int) -> list[str
     )
     vector_ids = list(result.scalars().all())
 
+    await bm25_repo.delete_for_note(session, note_id)
     await session.execute(
         sa_delete(Chunk).where(Chunk.note_id == note_id)
     )
@@ -214,6 +232,8 @@ async def update_note_path(session: AsyncSession, note_id: int, new_rel_path: st
     if note is None:
         return
     note.file_path = new_rel_path
+    await session.flush()
+    await bm25_repo.reindex_note(session, note_id)
     await session.commit()
 
 
@@ -232,6 +252,7 @@ async def clear_vault(session: AsyncSession, vault_id: int) -> list[str]:
     )
     ids = list(note_ids.scalars().all())
     if ids:
+        await bm25_repo.delete_for_vault(session, vault_id)
         await session.execute(sa_delete(Chunk).where(Chunk.vault_id == vault_id))
         await session.execute(sa_delete(Note).where(Note.vault_id == vault_id))
     await session.commit()
