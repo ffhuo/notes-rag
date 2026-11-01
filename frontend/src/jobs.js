@@ -1,6 +1,6 @@
 // 作业（run）的前端共用常量与纯函数 —— 阶段中文化 / 状态语义 / 进度形态判定。
 //
-// 为什么单独一个模块：这些映射被三处共用（Vault 卡片内嵌、任务页、作业详情抽屉），
+// 为什么单独一个模块：这些映射被 Vault 卡片内嵌和任务页共用，
 // 散落在组件里必然会漂移 —— 比如任务页认得 aborted，卡片却当成 running。
 //
 // 契约来源：M07 §5.4（任务与进度视图）、M03 §5.13.3（进度模型）、M03 §5.13.6（三类失败终态）。
@@ -8,15 +8,15 @@
 
 /** 阶段顺序（固定可见：让用户知道还有几步要走）。null/未知阶段不在此表。 */
 export const STAGES = [
-  { key: 'queued', label: '排队中', hint: '等待该 vault 的前一个作业结束（同库串行）' },
-  { key: 'probe', label: '检查源', hint: '校验 vault 路径 / 远端是否可达' },
-  { key: 'scan', label: '扫描文件', hint: '遍历目录并应用过滤规则；总量此时不可知' },
-  { key: 'diff', label: '比对变更', hint: '用 size+mtime 快判、content_hash 复核' },
-  { key: 'plan', label: '生成计划', hint: '分类四类变更并做删除护栏判定' },
-  { key: 'plan_ready', label: '等待确认', hint: 'dry_run 的终点：计划已生成，等你点「执行」' },
-  { key: 'index', label: '建立索引', hint: '解析 → 分块 → 嵌入 → 写入，主要耗时区' },
-  { key: 'prune', label: '清理删除', hint: '护栏通过后删除磁盘上已不存在的文件' },
-  { key: 'done', label: '完成', hint: '' },
+  { key: 'queued', label: '排队中' },
+  { key: 'probe', label: '检查源' },
+  { key: 'scan', label: '扫描文件' },
+  { key: 'diff', label: '比对变更' },
+  { key: 'plan', label: '生成计划' },
+  { key: 'plan_ready', label: '等待确认' },
+  { key: 'index', label: '建立索引' },
+  { key: 'prune', label: '清理删除' },
+  { key: 'done', label: '完成' },
 ]
 
 const STAGE_MAP = Object.fromEntries(STAGES.map((s) => [s.key, s]))
@@ -24,11 +24,6 @@ const STAGE_MAP = Object.fromEntries(STAGES.map((s) => [s.key, s]))
 /** 阶段中文名（未知阶段原样返回，方便排查新增阶段）。 */
 export function stageLabel(stage) {
   return STAGE_MAP[stage]?.label || stage || '—'
-}
-
-/** 阶段在当前模式下是否会被跳过 —— 用于把阶段列表画成「已过 / 当前 / 待办 / 不适用」。 */
-export function stageHint(stage) {
-  return STAGE_MAP[stage]?.hint || ''
 }
 
 /**
@@ -58,11 +53,6 @@ export function statusInfo(status) {
 /** 是否已到终态（轮询据此停表；见 §5.4.5「不要空转」）。 */
 export function isTerminal(status) {
   return !statusInfo(status).running
-}
-
-/** 是否处于「已受理取消、尚未停稳」——此时按钮要禁用并显示「正在停止…」。 */
-export function isCancelling(run) {
-  return !!run?.cancelling && !isTerminal(run?.status)
 }
 
 /**

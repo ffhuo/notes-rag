@@ -49,6 +49,8 @@ dev = [
 # 本项目是应用而非可发布库，禁止 uv 将自身 editable 安装为包
 package = false
 # 虚拟环境默认建在项目内 ./.venv，便于 IDE / 本机命令统一管理
+# chromadb 的 onnxruntime 转引依赖需要兼容 Intel macOS；新版本已停止提供该平台 wheel。
+required-environments = ["sys_platform == 'darwin' and platform_machine == 'x86_64'"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

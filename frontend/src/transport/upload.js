@@ -41,8 +41,3 @@ export async function updateVaultFiles(vault, files, onProgress, filters) {
   const safe = String(vault?.name || `vault-${vault?.id}`).replace(/[\\/:*?"<>|]/g, '_')
   return vaultsApi.replaceUpload(vault.id, blob, `${safe}.zip`)
 }
-
-export const uploadTransport = {
-  uploadVault,
-  updateVaultFiles,
-}

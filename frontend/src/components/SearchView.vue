@@ -131,14 +131,16 @@ function resetSearch() {
 
 <template>
   <section class="search">
-    <header class="search__intro">
-      <h2 class="search__title">检索</h2>
-      <p class="search__desc">
-        语义检索：按意思找，不必与原文用词一致。结果按相似度排序，附出处与片段。
-      </p>
+    <header class="page-intro">
+      <div>
+        <div class="eyebrow"><span class="eyebrow__dot"></span> FIND NOTES BY MEANING</div>
+        <h1>用意思，找到笔记</h1>
+        <p>语义检索不要求与原文用词一致，命中结果附带相关度和出处。</p>
+      </div>
+      <span class="search-demo-label"><AppIcon name="search" :size="14" />语义检索</span>
     </header>
 
-    <div class="search__bar">
+    <div class="search__bar panel">
       <AppInput
         v-model="query"
         class="search__input"
@@ -164,6 +166,11 @@ function resetSearch() {
       <AppButton variant="primary" icon="search" :loading="loading" :disabled="!canSearch" @click="search">
         检索
       </AppButton>
+      <div class="search-hint">
+        <AppIcon name="info" :size="14" />
+        检索范围：{{ vaults.find((vault) => String(vault.id) === vaultId)?.name || '选择 Vault' }}
+        <span>·</span>返回 {{ topK }} 条以内
+      </div>
     </div>
 
     <p v-if="error" class="search__alert">
@@ -194,22 +201,27 @@ function resetSearch() {
     />
 
     <template v-else>
-      <p class="search__count">{{ hitCountText }}</p>
+      <div class="search-results-heading">
+        <div><h2>检索结果</h2><p>{{ hitCountText }}</p></div>
+        <span class="demo-result-tag">真实索引结果</span>
+      </div>
 
       <div class="search__hits">
-        <AppCard v-for="(h, i) in hits" :key="`${h.note_id}-${i}`" padding="sm">
-          <span class="search__hit-head">
-            <span class="search__hit-title" :title="h.title">{{ h.title || '（无标题）' }}</span>
-            <span class="search__score">{{ h.score.toFixed(3) }}</span>
-          </span>
-
-          <span class="search__hit-path" :title="h.file_path">
-            <AppIcon name="file-text" :size="14" />
-            <span class="search__hit-path-text">{{ h.file_path }}</span>
-          </span>
-
-          <!-- score 相对长度条（等宽数字 + 长度双编码） -->
-          <AppProgress :value="Math.max(0, h.score)" :max="1" compact hide-meta />
+        <AppCard
+          v-for="(h, i) in hits"
+          :key="`${h.note_id}-${i}`"
+          padding="sm"
+          class="panel search-result"
+          :class="`search-result--${['blue', 'teal', 'amber'][i % 3]}`"
+        >
+          <div class="search-result__heading">
+            <span class="search-result__number">{{ String(i + 1).padStart(2, '0') }}</span>
+            <div class="search-result__title">
+              <h3 :title="h.title">{{ h.title || '（无标题）' }}</h3>
+              <span :title="h.file_path"><AppIcon name="file-text" :size="13" />{{ h.file_path }}</span>
+            </div>
+            <span class="search-score"><strong>{{ Number(h.score).toFixed(3) }}</strong><small>相关度</small></span>
+          </div>
 
           <!-- 按文件格式还原：markdown 走渲染，其余按纯文本原样显示（见 markdown.js） -->
           <div
@@ -224,15 +236,16 @@ function resetSearch() {
             <template v-else>{{ imageMarkersToText(h.content, h.images, false) }}</template>
           </div>
 
-          <AppButton
+          <button
             v-if="overflow[i]"
-            variant="ghost"
-            size="sm"
-            :icon="expanded[i] ? 'chevron-up' : 'chevron-down'"
+            class="search-result__expand"
+            type="button"
+            :aria-expanded="!!expanded[i]"
             @click="toggleContent(i)"
           >
-            {{ expanded[i] ? '收起' : '展开全文' }}
-          </AppButton>
+            {{ expanded[i] ? '收起片段' : '展开片段' }}
+            <AppIcon :name="expanded[i] ? 'chevron-up' : 'chevron-down'" :size="14" />
+          </button>
         </AppCard>
       </div>
     </template>
@@ -378,11 +391,188 @@ function resetSearch() {
   overflow: hidden;
 }
 
+.search-demo-label,
+.demo-result-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  color: var(--ui-primary);
+  background: var(--ui-primary-soft);
+  border-radius: 999px;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.search__bar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(145px, 190px) minmax(90px, 120px) auto;
+  gap: 10px;
+  padding: 16px;
+}
+
+.search__bar > :deep(.search__input) {
+  width: 100%;
+}
+
+.search-hint {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ui-muted);
+  font-size: 9px;
+}
+
+.search-hint :deep(svg) {
+  color: var(--ui-primary);
+}
+
+.search-results-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 3px 0 -7px;
+}
+
+.search-results-heading h2 {
+  color: var(--ui-ink);
+  font-size: 13px;
+}
+
+.search-results-heading p {
+  margin-top: 3px;
+  color: var(--ui-muted);
+  font-size: 9px;
+}
+
+.search__hits {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.search-result {
+  padding: 0;
+  border-left: 3px solid var(--ui-primary);
+}
+
+.search-result--teal {
+  border-left-color: var(--ui-success);
+}
+
+.search-result--amber {
+  border-left-color: var(--ui-warning);
+}
+
+.search-result :deep(.app-card__body) {
+  gap: 10px;
+}
+
+.search-result__heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.search-result__number {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--ui-primary);
+  background: var(--ui-primary-soft);
+  border-radius: 7px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.search-result--teal .search-result__number {
+  color: var(--ui-success);
+  background: var(--ui-surface-soft);
+}
+
+.search-result--amber .search-result__number {
+  color: var(--ui-warning);
+  background: var(--ui-surface-soft);
+}
+
+.search-result__title {
+  flex: 1;
+  min-width: 0;
+}
+
+.search-result__title h3 {
+  overflow: hidden;
+  color: var(--ui-ink);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-result__title > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--ui-muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-score {
+  display: grid;
+  flex: none;
+  justify-items: end;
+}
+
+.search-score strong {
+  color: var(--ui-primary);
+  font-family: var(--font-family-mono);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.search-score small {
+  color: var(--ui-muted);
+  font-size: 8px;
+}
+
+.search-result__expand {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  padding: 0;
+  color: var(--ui-primary);
+  background: transparent;
+  border: 0;
+  font-size: 9px;
+  cursor: pointer;
+}
+
 @media (max-width: 767px) {
   .search__vault,
   .search__topk {
     flex: 1 1 0;
     width: auto;
+  }
+
+  .search__bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .search__bar > :deep(.search__input) {
+    grid-column: 1 / -1;
+  }
+
+  .search__bar > :deep(button) {
+    width: 100%;
   }
 }
 </style>

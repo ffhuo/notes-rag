@@ -1,8 +1,8 @@
 <script setup>
 // 按钮（T2.1 / 规范 §4.2）。
 //
-// 关键约束：primary 变体的文字必须用 --color-accent-on（深色，随主题包提供），
-// 不得用白色 —— 琥珀底配白字仅约 2.2:1，不达 WCAG AA。
+// 主按钮使用品牌主色；强调色仅用于次级强调，避免与主操作混淆。
+// 前景色由明暗主题提供，确保主色变亮时仍满足对比度要求。
 // 加载态保留原宽（图标位换成旋转指示器、文案不变），避免按钮宽度跳动。
 import { computed } from 'vue'
 import AppIcon from './AppIcon.vue'
@@ -93,11 +93,11 @@ function onClick(event) {
 
 /* ---------- 变体 ---------- */
 .is-primary {
-  background: var(--color-accent);
-  color: var(--color-accent-on);
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
 }
 .is-primary:hover:not(:disabled) {
-  background: var(--color-accent-hover);
+  background: var(--color-primary-hover);
 }
 
 .is-secondary {

@@ -4,7 +4,7 @@
 // 结构：侧栏（可折叠 / 移动端抽屉）+ 顶栏（汉堡 + 页面标题 + 页面级主操作）+ 内容区。
 // 侧栏宽度与内容宽度的取值全部来自 L3 布局令牌（规范 §3.2）。
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { RouterView, useRoute } from 'vue-router'
+import { RouterView, useRoute, useRouter } from 'vue-router'
 import AppIcon from './components/AppIcon.vue'
 import AppSidebar from './components/AppSidebar.vue'
 import AppToast from './components/AppToast.vue'
@@ -13,8 +13,25 @@ import { initAuth, isReady, watchUnauthorized } from './auth'
 import { useTopbarActions } from './shell'
 
 const route = useRoute()
+const router = useRouter()
 const topbarActions = useTopbarActions()
 const pageTitle = computed(() => route.meta?.title || 'notes-rag')
+const infoOpen = ref(false)
+const workflow = [
+  { id: 'vaults', label: '文件入库', path: '/vaults' },
+  { id: 'tasks', label: '索引构建', path: '/tasks' },
+  { id: 'search', label: '语义检索', path: '/search' },
+  { id: 'chat', label: '问答与引用', path: '/chat' },
+  { id: 'keys', label: '助手调用', path: '/keys' },
+]
+const workflowIndex = computed(() => workflow.findIndex((step) => step.id === route.name))
+const shellStyle = computed(() => ({
+  '--demo-sidebar-width': collapsed.value ? '64px' : '242px',
+}))
+
+function navigateWorkflow(path) {
+  router.push(path)
+}
 
 /* ---------- 折叠状态：持久化 + md 断点默认折叠（规范 §3.2） ---------- */
 const SIDEBAR_KEY = 'nr_sidebar_collapsed'
@@ -90,7 +107,7 @@ watch(
   <!-- 未拿到可用凭据时只渲染鉴权弹窗：主界面一旦挂载就会打满 401 请求 -->
   <AuthGate v-if="!isReady" />
 
-  <div v-else class="app-shell">
+  <div v-else class="app-shell demo-shell" :style="shellStyle">
     <!-- 抽屉态下强制展开：抽屉里再显示 64px 图标条没有意义 -->
     <AppSidebar
       :collapsed="collapsed && !mobileOpen"
@@ -99,22 +116,15 @@ watch(
       @close-mobile="mobileOpen = false"
     />
 
-    <!-- 侧栏是 fixed（脱离文档流），用同宽占位撑住主区，避免内容被盖住 -->
-    <div
-      class="app-shell__sidebar-holder"
-      :class="{ 'is-collapsed': collapsed && !mobileOpen }"
-      aria-hidden="true"
-    ></div>
+    <div v-if="mobileOpen" class="demo-sidebar-mask" @click="mobileOpen = false"></div>
 
-    <div v-if="mobileOpen" class="app-shell__mask" @click="mobileOpen = false"></div>
-
-    <div class="app-main">
-      <header class="app-topbar">
+    <div class="app-main demo-main" :class="{ 'is-chat': route.name === 'chat' }">
+      <header class="app-topbar demo-topbar">
         <!-- 窄屏：开抽屉；桌面折叠态：展开侧栏（否则折叠后无入口恢复） -->
         <button
           v-if="isDrawer || collapsed"
           type="button"
-          class="app-topbar__hamburger"
+          class="app-topbar__hamburger demo-icon-button demo-menu-button"
           :aria-label="isDrawer ? '打开导航' : '展开侧栏'"
           :title="isDrawer ? '打开导航' : '展开侧栏'"
           @click="openNav"
@@ -122,22 +132,64 @@ watch(
           <AppIcon name="menu" :size="24" />
         </button>
 
-        <h1 class="app-topbar__title">{{ pageTitle }}</h1>
+        <div class="demo-topbar__crumb">
+          <span>工作空间</span>
+          <AppIcon name="chevron-right" :size="14" />
+          <strong>{{ pageTitle }}</strong>
+        </div>
 
-        <div class="app-topbar__actions">
-          <component
-            v-for="a in topbarActions"
-            :key="a.key"
-            :is="a.comp"
-            v-bind="a.props"
-            v-on="a.on"
-          >{{ a.text }}</component>
+        <div class="demo-topbar__right">
+          <div class="app-topbar__actions">
+            <component
+              v-for="a in topbarActions"
+              :key="a.key"
+              :is="a.comp"
+              v-bind="a.props"
+              v-on="a.on"
+            >{{ a.text }}</component>
+          </div>
+          <button
+            class="demo-icon-button demo-help-button"
+            type="button"
+            aria-label="产品说明"
+            :aria-expanded="infoOpen"
+            aria-controls="app-info"
+            @click="infoOpen = !infoOpen"
+          >
+            <AppIcon name="info" :size="18" />
+          </button>
+          <div v-if="infoOpen" id="app-info" class="demo-info" role="status">
+            知识库内容由你配置的 Vault 与模型处理。运行状态及错误信息以当前服务返回为准。
+          </div>
         </div>
       </header>
 
-      <main class="app-content">
+      <nav v-if="route.name === 'vaults'" class="demo-workflow" aria-label="知识工作流">
+        <template v-for="(step, index) in workflow" :key="step.id">
+          <button
+            type="button"
+            class="demo-workflow__step"
+            :class="{
+              'is-active': route.name === step.id,
+              'is-complete': workflowIndex > index,
+            }"
+            :aria-current="route.name === step.id ? 'step' : undefined"
+            @click="navigateWorkflow(step.path)"
+          >
+            <span class="demo-workflow__number">{{ index + 1 }}</span>
+            <span>{{ step.label }}</span>
+          </button>
+          <span v-if="index < workflow.length - 1" class="demo-workflow__line" aria-hidden="true"></span>
+        </template>
+      </nav>
+
+      <main class="app-content demo-content" :aria-label="pageTitle">
         <RouterView />
       </main>
+      <footer v-if="route.name !== 'chat'" class="demo-footer">
+        <span>notes-rag · 个人知识工作台</span>
+        <span>数据与操作由当前服务提供</span>
+      </footer>
     </div>
   </div>
 
@@ -147,80 +199,84 @@ watch(
 
 <style scoped>
 .app-shell {
-  display: flex;
+  display: block;
   min-height: 100%;
 }
 
-.app-shell__mask {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 20;
-  background: var(--color-overlay);
-}
-
-/* 侧栏占位：宽度跟随侧栏折叠态；移动端侧栏是抽屉（不占位） */
-.app-shell__sidebar-holder {
-  flex: 0 0 var(--sidebar-width);
-  width: var(--sidebar-width);
-}
-.app-shell__sidebar-holder.is-collapsed {
-  flex-basis: var(--sidebar-width-collapsed);
-  width: var(--sidebar-width-collapsed);
-}
+.demo-sidebar-mask { position: fixed; inset: 0; z-index: 20; background: var(--color-overlay); }
 
 /* ---------- 主区 ---------- */
 .app-main {
-  flex: 1 1 auto;
-  min-width: 0; /* 防止 flex 子项被内容撑破 */
+  min-height: 100vh;
+  margin-left: var(--demo-sidebar-width, 242px);
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
 .app-topbar {
   flex: none;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  height: var(--topbar-height);
-  padding: 0 var(--space-6);
-  background: var(--color-bg-surface);
-  border-bottom: var(--border-width) solid var(--color-border);
 }
 
-/* 汉堡：窄屏常驻；桌面端仅在侧栏折叠时出现（见模板 v-if） */
 .app-topbar__hamburger {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 44px;
-  height: 44px;
-  margin-left: calc(var(--space-3) * -1);
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-primary);
-  cursor: pointer;
-  transition: background-color var(--duration-fast) var(--ease-standard);
-}
-.app-topbar__hamburger:hover {
-  background: var(--color-bg-subtle);
+  display: grid;
 }
 
-.app-topbar__title {
+.app-content {
   flex: 1 1 auto;
-  min-width: 0;
+  width: min(100%, 1370px);
+  max-width: 1370px;
+  margin: 0 auto;
+  padding: 32px 36px 36px;
+}
+
+.demo-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 36px 16px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+}
+
+.demo-main.is-chat {
+  height: 100vh;
+  min-height: 0;
   overflow: hidden;
-  font-size: var(--font-size-h1);
-  line-height: var(--line-height-h1);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-  white-space: nowrap;
-  text-overflow: ellipsis;
+}
+.demo-main.is-chat .app-content {
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  padding-bottom: 18px;
+}
+
+@media (max-width: 1080px) {
+  .app-topbar, .demo-workflow { padding-right: 24px; padding-left: 24px; }
+  .app-content { padding-right: 24px; padding-left: 24px; }
+  .demo-footer { padding-right: 24px; padding-left: 24px; }
+}
+
+@media (max-width: 767px) {
+  .app-main { margin-left: 0; }
+  .app-topbar { justify-content: flex-start; padding: 0 15px; }
+  .app-topbar__hamburger { display: grid; }
+  .demo-sidebar-mask { display: block; }
+  .app-content { min-height: calc(100vh - 156px); padding: 25px 15px 30px; }
+  .demo-workflow { overflow-x: auto; min-height: 58px; padding: 0 14px; }
+  .demo-workflow__step { gap: 6px; font-size: 9px; }
+  .demo-workflow__number { width: 20px; height: 20px; }
+  .demo-workflow__line { width: 14px; flex: none; margin: 0 2px; }
+  .demo-footer { padding: 12px 15px 17px; }
+  .demo-main.is-chat { height: 100dvh; }
+  .demo-main.is-chat .app-content { min-height: 0; padding-top: 14px; padding-bottom: 12px; }
+}
+
+@media (max-width: 430px) {
+  .demo-workflow { gap: 0; }
+  .demo-workflow__step { flex: none; }
+  .demo-workflow__line { width: 10px; }
+  .demo-footer { font-size: 8px; }
 }
 
 .app-topbar__actions {
@@ -230,23 +286,6 @@ watch(
   gap: var(--space-2);
 }
 
-.app-content {
-  flex: 1 1 auto;
-  width: 100%;
-  max-width: var(--content-max-width);
-  margin: 0 auto;
-  padding: var(--space-6);
-}
-
 @media (max-width: 767px) {
-  .app-topbar {
-    padding: 0 var(--space-4);
-  }
-  .app-shell__sidebar-holder {
-    display: none;
-  }
-  .app-content {
-    padding: var(--space-4);
-  }
 }
 </style>

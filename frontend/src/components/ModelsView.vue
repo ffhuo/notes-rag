@@ -20,7 +20,6 @@ import AppIcon from './AppIcon.vue'
 import AppInput from './AppInput.vue'
 import AppModal from './AppModal.vue'
 import AppSelect from './AppSelect.vue'
-import AppTable from './AppTable.vue'
 
 const TABS = [
   { value: 'llm', label: 'LLM 对话模型' },
@@ -39,14 +38,6 @@ const KIND_OPTIONS = [
 const ASR_PROTOCOL_OPTIONS = [
   { value: '', label: 'OpenAI ASR（/audio/transcriptions，默认）' },
   { value: 'dashscope_native', label: 'DashScope 原生（百炼 Qwen-Audio-3.x-ASR-Flash）' },
-]
-
-const columns = [
-  { key: 'name', label: '名称', sortable: true },
-  { key: 'model', label: '模型标识', mono: true },
-  { key: 'base_url', label: '端点', mono: true },
-  { key: 'api_key_masked', label: '密钥', mono: true },
-  { key: 'is_default', label: '默认' },
 ]
 
 const models = ref([])
@@ -101,13 +92,6 @@ async function load() {
 
 onMounted(() => {
   setTopbarActions([
-    {
-      key: 'create',
-      comp: AppButton,
-      props: { variant: 'primary', icon: 'plus' },
-      on: { click: () => openCreate() },
-      text: '新建模型',
-    },
     {
       key: 'refresh',
       comp: AppButton,
@@ -299,13 +283,19 @@ async function doRemove() {
 
 <template>
   <section class="models">
-    <header class="models__intro">
-      <h2 class="models__title">模型管理</h2>
-      <p class="models__desc">
-        LLM 无状态，问答时可随时换；<strong>Embedding 与索引强绑定</strong>，换模型后必须对相关
-        vault 重建索引，否则新旧向量会混在一起。
-      </p>
+    <header class="page-intro">
+      <div>
+        <div class="eyebrow"><span class="eyebrow__dot"></span> MODEL CONFIGURATION</div>
+        <h1>为每类任务选择合适模型</h1>
+        <p>LLM 可随问答切换；Embedding 与已有索引绑定；ASR 用于语音转写。</p>
+      </div>
+      <AppButton variant="primary" icon="plus" @click="openCreate">新建模型</AppButton>
     </header>
+
+    <p class="models__warning">
+      <AppIcon name="info" :size="15" />
+      <span><strong>Embedding 提醒：</strong>更换向量模型后，相关知识库需要重建索引。</span>
+    </p>
 
     <!-- Tabs：两个 kind 各自一张表（规范 §5.5） -->
     <div class="models__tabs" role="tablist">
@@ -350,92 +340,72 @@ async function doRemove() {
       </span>
     </p>
 
-    <AppTable
-      :columns="columns"
-      :rows="visible"
-      :loading="loading && !models.length"
-      row-key="id"
-      sortable
-      empty-text="暂无配置"
-      empty-icon="models"
-    >
-      <template #cell-name="{ row }">
-        <span class="models__name-cell">
-          <span class="models__name">{{ row.name }}</span>
-          <span v-if="row.kind === 'llm' && row.params?.multimodal" class="models__tag">
-            支持图片
-          </span>
-        </span>
-      </template>
-
-      <template #cell-base_url="{ row }">
-        <span class="models__muted">{{ row.base_url || '（OpenAI 官方端点）' }}</span>
-      </template>
-
-      <template #cell-api_key_masked="{ row }">
-        <span class="models__muted">{{ row.api_key_masked || '（未设置）' }}</span>
-      </template>
-
-      <!-- 默认项：图标 + 文本双编码（不靠颜色单独表意） -->
-      <template #cell-is_default="{ row }">
-        <span v-if="row.is_default" class="models__default">
-          <AppIcon name="star" :size="14" />
-          <span>默认</span>
-        </span>
-        <AppButton
-          v-else
-          variant="ghost"
-          size="sm"
-          @click="makeDefault(row)"
-        >
-          设为默认
-        </AppButton>
-      </template>
-
-      <template #empty>
-        <AppEmptyState
-          v-if="!counts[activeKind]"
-          size="sm"
-          icon="models"
-          title="还没有这类模型"
-          description="新建一个配置即可用于问答、索引或语音转写。"
-          action-text="新建模型"
-          action-icon="plus"
-          @action="openCreate"
-        />
-        <AppEmptyState
-          v-else
-          size="sm"
-          icon="search"
-          title="没有匹配的模型"
-          description="试试放宽筛选条件。"
-        />
-      </template>
-
-      <template #row-actions="{ row }">
-        <span class="models__row-actions">
-          <AppButton
-            variant="secondary"
-            size="sm"
-            :loading="testingId === row.id"
-            @click="testOne(row)"
-          >
-            试连
-          </AppButton>
-          <AppButton variant="secondary" size="sm" @click="openEdit(row)">编辑</AppButton>
-          <AppButton
-            variant="danger"
-            size="sm"
-            icon="trash"
-            :disabled="!!blockReason(row)"
-            :title="blockReason(row) || '删除该配置'"
-            @click="askRemove(row)"
-          >
-            删除
-          </AppButton>
-        </span>
-      </template>
-    </AppTable>
+    <section class="models__list panel">
+      <header class="models__list-heading">
+        <div><h2>{{ TABS.find((tab) => tab.value === activeKind)?.label }}</h2><p>{{ visible.length }} 个配置</p></div>
+        <span>配置详情</span>
+      </header>
+      <div v-if="loading && !models.length" class="models__list-state">
+        <AppIcon name="loader" :size="18" />正在加载模型配置…
+      </div>
+      <AppEmptyState
+        v-else-if="!visible.length"
+        size="sm"
+        :icon="filtered ? 'search' : 'models'"
+        :title="filtered ? '没有匹配的模型' : '还没有这类模型'"
+        :description="filtered ? '试试放宽筛选条件。' : '新建一个配置即可用于问答、索引或语音转写。'"
+        :action-text="!filtered ? '新建模型' : ''"
+        action-icon="plus"
+        @action="openCreate"
+      />
+      <div v-else class="models__rows">
+        <article v-for="row in visible" :key="row.id" class="models__row">
+          <span class="models__row-icon"><AppIcon name="models" :size="18" /></span>
+          <div class="models__row-main">
+            <div class="models__row-title">
+              <strong>{{ row.name }}</strong>
+              <span v-if="row.is_default" class="models__default"><AppIcon name="star" :size="13" />默认</span>
+              <span v-if="row.kind === 'llm' && row.params?.multimodal" class="models__tag">支持图片</span>
+            </div>
+            <code class="models__row-model">{{ row.model }}</code>
+            <div class="models__row-meta">
+              <span><small>端点</small>{{ row.base_url || 'OpenAI 官方端点' }}</span>
+              <span><small>密钥</small><code>{{ row.api_key_masked || '未设置' }}</code></span>
+            </div>
+            <p v-if="blockReason(row)" class="models__row-warning">{{ blockReason(row) }}</p>
+          </div>
+          <div class="models__row-actions">
+            <AppButton
+              v-if="!row.is_default"
+              variant="secondary"
+              size="sm"
+              @click="makeDefault(row)"
+            >
+              设为默认
+            </AppButton>
+            <AppButton
+              variant="secondary"
+              size="sm"
+              :loading="testingId === row.id"
+              @click="testOne(row)"
+            >
+              试连
+            </AppButton>
+            <AppButton variant="secondary" size="sm" @click="openEdit(row)">编辑</AppButton>
+            <AppButton
+              variant="danger"
+              size="sm"
+              icon="trash"
+              :disabled="!!blockReason(row)"
+              :title="blockReason(row) || '删除该配置'"
+              @click="askRemove(row)"
+            >
+              删除
+            </AppButton>
+          </div>
+        </article>
+      </div>
+    </section>
 
     <!-- 新建 / 编辑（kind 在编辑时不可改：后端 PATCH 不接受 kind） -->
     <AppModal v-model="editing" :title="form.id ? '编辑模型配置' : '新建模型配置'">
@@ -618,6 +588,29 @@ async function doRemove() {
   color: var(--color-warning);
 }
 
+.models__warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--ui-text);
+  background: var(--ui-primary-soft);
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  font-size: 9px;
+  line-height: 15px;
+}
+
+.models__warning :deep(svg) {
+  flex: none;
+  color: var(--ui-primary);
+}
+
+.models__warning strong {
+  color: var(--ui-ink);
+}
+
 /* ---------- 单元格 ---------- */
 .models__name-cell {
   display: inline-flex;
@@ -708,6 +701,208 @@ async function doRemove() {
   }
   .models__count {
     margin-left: 0;
+  }
+}
+
+.models__tabs {
+  gap: 3px;
+  margin-top: 2px;
+  overflow-x: auto;
+  border-bottom-color: var(--ui-border);
+}
+
+.models__tab {
+  min-height: 40px;
+  padding: 0 12px;
+  color: var(--ui-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.models__tab.is-active {
+  color: var(--ui-primary);
+  border-bottom-color: var(--ui-primary);
+}
+
+.models__tab-count {
+  min-width: 17px;
+  padding: 1px 5px;
+  color: var(--ui-muted);
+  background: var(--ui-surface-soft);
+  border-radius: 999px;
+  text-align: center;
+  font-size: 8px;
+}
+
+.models__filters {
+  justify-content: space-between;
+}
+
+.models__search {
+  flex: 0 1 320px;
+}
+
+.models__count {
+  color: var(--ui-muted);
+  font-size: 9px;
+}
+
+.models__list {
+  overflow: hidden;
+  padding: 0;
+}
+
+.models__list-heading {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.models__list-heading h2 {
+  color: var(--ui-ink);
+  font-size: 11px;
+}
+
+.models__list-heading p,
+.models__list-heading > span {
+  margin-top: 3px;
+  color: var(--ui-muted);
+  font-size: 8px;
+}
+
+.models__list-state {
+  min-height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ui-muted);
+  font-size: 10px;
+}
+
+.models__rows {
+  display: grid;
+}
+
+.models__row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.models__row:last-child {
+  border-bottom: 0;
+}
+
+.models__row-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  color: var(--ui-primary);
+  background: var(--ui-primary-soft);
+  border-radius: 10px;
+}
+
+.models__row-main {
+  min-width: 0;
+}
+
+.models__row-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.models__row-title > strong {
+  color: var(--ui-ink);
+  font-size: 10px;
+}
+
+.models__row-model {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--ui-muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models__row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 7px;
+  color: var(--ui-muted);
+  font-size: 8px;
+}
+
+.models__row-meta span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.models__row-meta small {
+  color: var(--ui-muted);
+}
+
+.models__row-meta code {
+  overflow: hidden;
+  max-width: 280px;
+  color: var(--ui-text);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models__default {
+  padding: 3px 6px;
+  color: var(--ui-primary);
+  background: var(--ui-primary-soft);
+  font-size: 8px;
+}
+
+.models__tag {
+  padding: 3px 6px;
+  color: var(--ui-success);
+  background: var(--ui-surface-soft);
+  font-size: 8px;
+}
+
+.models__row-warning {
+  margin-top: 5px;
+  color: var(--ui-warning);
+  font-size: 8px;
+}
+
+.models__row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+@media (max-width: 860px) {
+  .models__row {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .models__row-actions {
+    grid-column: 2;
+    justify-content: flex-start;
   }
 }
 </style>
