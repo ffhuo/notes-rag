@@ -10,7 +10,8 @@ name = "notes-rag"
 version = "1.0"
 description = "知识库智能后端（RAG 应用）：把 Markdown 笔记变成可检索、可问答的 FastAPI 服务"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
+# Chroma's onnxruntime dependency has no Python 3.14 wheel for Intel macOS.
 # 运行时依赖（与 docs/design.md 技术选型一致）
 dependencies = [
     "fastapi>=0.110",

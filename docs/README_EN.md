@@ -61,6 +61,8 @@ notes-rag/
 
 ## Setup (uv)
 
+> Supported Python versions: 3.12–3.13.
+
 > Install uv first (either one):
 > - `python -m pip install uv`
 > - or the official script: `curl -LsSf https://astral.sh/uv/install.sh | sh`

@@ -64,7 +64,7 @@ notes-rag/
 > 本机需先安装 uv（任选其一）：
 > - `python -m pip install uv`
 > - 或官方脚本：`curl -LsSf https://astral.sh/uv/install.sh | sh`
-> 本机 Python 命令约定：统一用 `python`（3.12）。
+> 本项目支持 Python 3.12–3.13；本机命令约定：统一用 `python`（3.12）。
 
 **依赖默认从官方 PyPI 安装**；国内网络可指定镜像加速：
 `make sync UV_INDEX=https://mirrors.aliyun.com/pypi/simple/`（`Makefile` 会把它注入 `UV_DEFAULT_INDEX`，优先级高于配置文件；个人偏好也可放未入库的 `uv.toml`）。
