@@ -6,7 +6,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: notes-rag:latest
+    image: ${IMAGE:-notes-rag}:${TAG:-latest}
     container_name: notes-rag
     restart: unless-stopped
     ports:

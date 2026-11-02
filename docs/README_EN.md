@@ -114,7 +114,7 @@ uv run uvicorn app.main:app --reload
 ```bash
 # Build and start (data persisted to ./data, logs to ./logs, listening on 0.0.0.0)
 make docker-build
-make docker-up          # equivalent to docker compose -f deploy/docker-compose.yml up -d --build
+make docker-up          # build and run with the same tag derived from pyproject.toml
 make docker-down        # stop
 
 # or plain docker run
@@ -236,7 +236,7 @@ The root `Makefile` wraps common operations into one-liners (uv path fallback in
 | `make frontend-check` | Frontend gate: build + token contrast + style compliance (for CI) |
 | `make frontend-tokens` | Export design tokens for mini-programs (rpx) / RN (TS) |
 | `make docker-build` | Build the image (multi-stage, includes the frontend build) |
-| `make docker-up` | Start via docker compose |
+| `make docker-up` | Build and start via docker compose with the tag derived from `pyproject.toml` |
 | `make docker-down` | Stop compose services |
 
 > See all commands: `make help`.

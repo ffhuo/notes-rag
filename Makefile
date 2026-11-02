@@ -106,7 +106,7 @@ docker-run:  ## 运行容器（数据持久化到 ./data，监听 0.0.0.0）
 		$(IMAGE):$(TAG)
 
 docker-up:  ## 用 docker compose 启动（含数据卷）
-	docker compose -f deploy/docker-compose.yml up -d --build
+	IMAGE="$(IMAGE)" TAG="$(TAG)" docker compose -f deploy/docker-compose.yml up -d --build
 
 docker-down:  ## 停止 compose 服务
 	docker compose -f deploy/docker-compose.yml down

@@ -113,7 +113,7 @@ uv run uvicorn app.main:app --reload
 ```bash
 # 构建并启动（数据持久化到 ./data、日志到 ./logs，监听 0.0.0.0）
 make docker-build
-make docker-up          # 等价于 docker compose -f deploy/docker-compose.yml up -d --build
+make docker-up          # 使用与 docker-build 相同的 pyproject 版本 tag 构建并启动
 make docker-down        # 停止
 
 # 或直接用 docker run
@@ -235,7 +235,7 @@ vault 完全由前端 / API 运行时配置，**不在 `.env` 中管理**：在�
 | `make frontend-check` | 前端门禁：构建 + 令牌对比度 + 样式合规（CI 用） |
 | `make frontend-tokens` | 导出主题令牌给小程序（rpx）/ RN（TS） |
 | `make docker-build` | 构建镜像（多阶段：含前端构建） |
-| `make docker-up` | 用 docker compose 启动 |
+| `make docker-up` | 用 docker compose 构建并启动，镜像 tag 与 `pyproject.toml` 版本一致 |
 | `make docker-down` | 停止 compose 服务 |
 
 > 查看全部命令：`make help`。
