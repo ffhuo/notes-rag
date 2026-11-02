@@ -4,7 +4,7 @@
 
 > A self-hosted knowledge base app (RAG) — turn your Markdown / plain-text notes (an Obsidian vault or any directory) into a **searchable, Q&A-ready Web application** (backend API + frontend UI).
 > Vaults are configured in the web UI (add a local directory / upload a vault `.zip`); multi-user support is controlled by a config switch (single-user by default).
-> Configure **multiple LLMs / multiple Embedding models** and choose per use: the LLM can be switched on every request; the Embedding model is bound to the index, so switching requires re-indexing (see module index M08 in `DESIGN_EN.md`).
+> Configure multiple LLM, Embedding, ASR, and reranker profiles: the LLM can be switched on every request; the Embedding model is bound to the index, so switching requires re-indexing (see module index M08 in `DESIGN_EN.md`).
 > Supported parsers: `.md` / `.txt` / `.docx` / `.pdf` / `.xlsx` (scanned PDFs go through a multimodal LLM), plus file/folder filtering (module index M11).
 > The repo ships a layered architecture with a **design overview**: `DESIGN_EN.md` (architecture / layout / choices / data flow / API / data model / config / conventions / module index) — implement the business logic step by step from the docs, or deploy it directly as a self-hosted knowledge base.
 
@@ -61,6 +61,8 @@ notes-rag/
 
 ## Setup (uv)
 
+> Supported Python versions: 3.12–3.13.
+
 > Install uv first (either one):
 > - `python -m pip install uv`
 > - or the official script: `curl -LsSf https://astral.sh/uv/install.sh | sh`
@@ -112,7 +114,7 @@ uv run uvicorn app.main:app --reload
 ```bash
 # Build and start (data persisted to ./data, logs to ./logs, listening on 0.0.0.0)
 make docker-build
-make docker-up          # equivalent to docker compose -f deploy/docker-compose.yml up -d --build
+make docker-up          # build and run with the same tag derived from pyproject.toml
 make docker-down        # stop
 
 # or plain docker run
@@ -173,12 +175,15 @@ Vaults are configured entirely at runtime via the UI / API, **not in `.env`**: o
 - **false (single-user)**: everything belongs to `user_id="default"`; APIs authenticate via `X-API-Key`; no login page (enter the API Key once in settings).
 - **true (multi-user)**: enables the `users` table + JWT (`JWT_SECRET` required); the frontend shows a Login page; protected APIs accept both `X-API-Key` and `Bearer <JWT>`; vaults / conversations are isolated per user (see M06).
 
-### Multi-model (multiple LLMs / Embeddings, selectable per use)
+### Multi-model (LLM / Embedding / ASR / Reranker)
 
-Model configuration (LLM / Embedding / ASR) lives entirely in the `model_profiles` table — **`.env` no longer provides model config** (no fallbacks); the "Models" page can create/edit/delete, set defaults, and test connections.
+Model configuration lives entirely in the `model_profiles` table — **`.env` no longer provides model config** (no fallbacks); the "Models" page can create/edit/delete, set defaults, and test connections.
 
 - **LLM**: stateless — **switchable on every request** (`ChatRequest.llm_profile`, a dropdown on the chat page).
 - **Embedding**: strongly bound to the index — vectors are split into collections by `v{vault}_m{profile}`, so retrieval must use the same model that built the index; switching = reindex that vault (`POST /vaults/{id}/reindex?embed_profile=...`). The API **deliberately does not expose** `SearchRequest.embed_profile`, avoiding the silent failure of "recalls results but all noise".
+- **Hybrid retrieval**: Search, Chat, and MCP search use SQLite FTS5 BM25 plus vector retrieval by default, with RRF rank fusion. BM25 uses jieba tokenization for Chinese and filters common Chinese/English question words to reduce irrelevant matches caused by phrases like "what is" or "how to use". Set `BM25_ENABLED=false` in `.env` to disable it.
+- **Retrieval/reranker pool sizes**: Configure `VECTOR_RECALL_*`, `BM25_RECALL_*`, and `RERANK_CANDIDATE_*` in `.env` for vector candidates, BM25 candidates, and reranker input candidates. Defaults are `min(max(top_k × 4, 20), 100)` per candidate pool; `RETRIEVAL_RRF_K=60`. The API still returns at most `top_k` results. Existing chunks are backfilled into FTS on first startup, then updated with sync operations.
+- **Reranker**: configure a SiliconFlow or Cohere `kind=rerank` profile and make it the default to rerank hybrid candidates. Failures are logged and fall back to RRF order. `score` remains vector similarity; optional `bm25_score`, `fusion_score`, and `rerank_score` report the other ranking signals.
 
 See `DESIGN_EN.md` module index M08.
 
@@ -230,7 +235,7 @@ The root `Makefile` wraps common operations into one-liners (uv path fallback in
 | `make frontend-check` | Frontend gate: build + token contrast + style compliance (for CI) |
 | `make frontend-tokens` | Export design tokens for mini-programs (rpx) / RN (TS) |
 | `make docker-build` | Build the image (multi-stage, includes the frontend build) |
-| `make docker-up` | Start via docker compose |
+| `make docker-up` | Build and start via docker compose with the tag derived from `pyproject.toml` |
 | `make docker-down` | Stop compose services |
 
 > See all commands: `make help`.

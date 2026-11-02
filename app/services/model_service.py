@@ -1,9 +1,10 @@
-"""业务·模型配置 — 多 LLM / 多 Embedding 的解析与选择（见 design.md §10 模块索引 M08）。
+"""业务·模型配置 — 多模型的解析与选择（见 design.md §10 模块索引 M08）。
 
 能力：
 - 解析「本次请求用哪个模型」：显式 ref → 用户默认 → 首条 enabled（见 §18.3）
 - 把 ModelProfile 解析成 ModelRuntime（端点 / 密钥取配置自身值），rag 层只认 ModelRuntime
 - 构造 OpenAI 兼容客户端（AsyncOpenAI），供 embedder / llm_client 使用
+- 解析默认 rerank profile，供 Search / Chat 共用检索链
 - **embedding 一致性守卫**：检索必须用「建该 vault 索引时那个」embedding，换模型需先重建索引（§18.2）
 
 主要函数：
@@ -33,6 +34,7 @@ from app.models.schemas import (
 from app.rag.client import build_client
 from app.rag.embedder import embed_one
 from app.rag.llm_client import chat
+from app.rag.reranker import rerank
 from app.repositories import model_repo
 
 
@@ -177,6 +179,14 @@ async def resolve_image_runtime(session, user_id: str) -> ModelRuntime | None:
     return None
 
 
+async def resolve_rerank_runtime(session, user_id: str) -> ModelRuntime | None:
+    """Resolve the enabled default rerank profile, or return None when not configured."""
+    profile = await model_repo.get_default(session, user_id, "rerank")
+    if profile is None or not profile.enabled:
+        return None
+    return to_runtime(profile)
+
+
 # ===== CRUD 编排 =====
 
 
@@ -214,7 +224,7 @@ def to_out(profile: ModelProfile) -> ModelProfileOut:
 
 
 async def list_models(session, user_id: str, kind: str | None = None) -> list[ModelProfileOut]:
-    """列出当前用户的模型配置（可按 kind=llm|embed 过滤）。"""
+    """列出当前用户的启用模型配置，可按 kind 过滤。"""
     profiles = await model_repo.list_profiles(session, user_id, kind, only_enabled=True)
     return [_to_out(p) for p in profiles]
 
@@ -282,7 +292,7 @@ async def set_default(session, profile: ModelProfile) -> ModelProfileOut:
 
 
 async def test_connection(runtime: ModelRuntime) -> ModelTestResult:
-    """连通性测试：embed 试 1 条，llm 试极短对话，asr 只探端点。
+    """连通性测试：embed 试 1 条，rerank 试固定候选，llm 试极短对话，asr 只探端点。
 
     asr 刻意不做真实转写：那需要造一段音频，且按秒计费 ——
     用 GET /models 验证「端点可达 + 鉴权有效」就够了，识别质量由实际使用检验。
@@ -295,6 +305,13 @@ async def test_connection(runtime: ModelRuntime) -> ModelTestResult:
         elif runtime.kind == "asr":
             client = build_client(runtime)
             await client.models.list()
+        elif runtime.kind == "rerank":
+            await rerank(
+                "reranker connectivity test",
+                ["This document is a connectivity test."],
+                runtime,
+                top_n=1,
+            )
         else:
             await chat(
                 [{"role": "user", "content": "hi"}],

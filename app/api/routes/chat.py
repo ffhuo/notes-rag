@@ -2,6 +2,7 @@
 
 能力：
 - 接收 query / conversation_id / top_k / vault_id / llm_profile
+- vault_id 留空时检索当前用户所有已索引 vault，并按名次融合结果
 - 以 text/event-stream 流式返回：token 片段 / sources 来源 / done 结束 / error 错误
 - 受鉴权保护（get_current_user：X-API-Key 或 Bearer JWT，见 §17.3）
 - 用 StreamingResponse 包装 chat_service.stream 的生成器
@@ -24,7 +25,7 @@ from app.api.deps import (
     get_session,
     resolve_embed_runtime,
 )
-from app.models.schemas import ChatRequest
+from app.models.schemas import ChatRequest, ModelRuntime
 from app.repositories import vault_repo
 from app.services import chat_service, model_service
 from app.services.model_service import (
@@ -32,6 +33,7 @@ from app.services.model_service import (
     ModelNotFound,
     to_runtime,
 )
+from app.services.retrieval_service import VaultRetrievalScope
 
 router = APIRouter(prefix="/api/v1", tags=["chat"])
 
@@ -69,6 +71,39 @@ async def _resolve_llm(
     return to_runtime(profile)
 
 
+async def _resolve_all_vault_scopes(
+    session: AsyncSession,
+    user_id: str,
+) -> list[VaultRetrievalScope]:
+    """Resolve indexed vaults owned by the caller for cross-vault chat."""
+    vaults = await vault_repo.list_vaults(session, user_id)
+    indexed_vaults = [
+        vault
+        for vault in vaults
+        if vault.indexed_at is not None and vault.embed_profile_id is not None
+    ]
+    if not indexed_vaults:
+        raise HTTPException(
+            status_code=409,
+            detail="当前账号下没有已索引的知识库，请先同步或重建索引",
+        )
+
+    scopes: list[VaultRetrievalScope] = []
+    for vault in indexed_vaults:
+        embed_runtime, embed_profile_id = await resolve_embed_runtime(
+            session, user_id, vault
+        )
+        scopes.append(
+            VaultRetrievalScope(
+                vault_id=vault.id,
+                vault_name=vault.name,
+                embed_profile_id=embed_profile_id,
+                embed_runtime=embed_runtime,
+            )
+        )
+    return scopes
+
+
 @router.post("/chat")
 async def chat(
     req: ChatRequest,
@@ -93,7 +128,7 @@ async def chat(
         except (TypeError, ValueError):
             raise HTTPException(status_code=422, detail="conversation_id 必须是整数")
 
-    # vault 可选：给了就必须归属正确，并据此确定检索用 embedding
+    # 指定 vault 时按其绑定的 embedding 检索；留空时检索当前用户的全部已索引 vault
     vault = None
     if req.vault_id:
         try:
@@ -107,9 +142,16 @@ async def chat(
             )
 
     llm_runtime = await _resolve_llm(session, user_id, req.llm_profile)
-    embed_runtime, embed_profile_id = await resolve_embed_runtime(
-        session, user_id, vault
-    )
+    retrieval_scopes = None
+    embed_runtime: ModelRuntime | None = None
+    embed_profile_id: int | str | None = None
+    if vault is None:
+        retrieval_scopes = await _resolve_all_vault_scopes(session, user_id)
+    else:
+        embed_runtime, embed_profile_id = await resolve_embed_runtime(
+            session, user_id, vault
+        )
+    rerank_runtime = await model_service.resolve_rerank_runtime(session, user_id)
 
     async def event_stream():
         """把 chat_service 的事件 dict 逐个编码为 SSE。"""
@@ -123,7 +165,9 @@ async def chat(
                 vault_id=vault.id if vault is not None else None,
                 embed_runtime=embed_runtime,
                 embed_profile_id=embed_profile_id,
+                retrieval_scopes=retrieval_scopes,
                 llm_runtime=llm_runtime,
+                rerank_runtime=rerank_runtime,
             ):
                 yield _sse(event.get("type", "message"), event.get("data"))
         except Exception as e:  # noqa: BLE001 —— 流内异常转 error 事件，不能裸抛断流

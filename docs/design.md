@@ -214,17 +214,21 @@ POST /vaults/{id}/sync（或 /ingest?mode=sync）→ 202 { run_id }，随后后�
 POST /search
   → retrieval_service.retrieve(query, top_k, threshold, vault_id)
   → 解析该 vault 生效的 embedding（vaults.embed_profile_id）→ 一致性守卫
-  → embedder.embed([query]) → vectorstore.query(vector, top_k, threshold)
-  → 组装 ChunkHit（note_id / file_path / title / content / score）
+  → 并行召回：vectorstore（向量）+ SQLite FTS5（jieba 分词 BM25）
+  → RRF 按名次融合候选 → 可选 reranker → 返回 Top-K
+  → 组装 ChunkHit（保留 score / bm25_score / fusion_score / rerank_score 的独立语义）
 ```
 
 **接口层故意不暴露 `embed_profile`** —— 检索必须用建索引时那个模型（见 M04 §5.3）。
+候选数量由 `.env` 中 `VECTOR_RECALL_*`、`BM25_RECALL_*` 与 `RERANK_CANDIDATE_*` 控制；默认每路为 `min(max(top_k × 4, 20), 100)`，最终返回条数仍由 `top_k` 决定。FTS 索引在 SQLite 中维护，首次启动回填存量 chunk，后续随 chunk 替换、删除和笔记改名/标题更新。
+BM25 查询会从 jieba 分词结果中排除常见中英文疑问词，避免 OR 查询仅凭“是什么 / 怎么用”等通用词召回无关片段；向量召回不受此过滤影响。
 
 ### 5.3 Chat（SSE 流式）
 
 ```
 POST /chat  { query, conversation_id?, top_k, vault_id?, llm_profile? }
-  → 解析 LLM（三级优先级）→ retrieval_service.retrieve(...)
+  → 解析 LLM（三级优先级）→ 按 vault 检索；vault_id 省略时检索当前用户所有已索引 vault
+  → 跨 vault 结果按 RRF 名次融合，不直接比较不同 embedding 的分数
   → 组装 system（只依据 <context> 回答，禁止编造）+ 上下文片段 + history
   → llm_client.stream_chat(messages, runtime) → 逐 token yield
   → SSE: data:{"type":"token","text":"..."} … {"type":"sources",...} {"type":"done"}
@@ -232,6 +236,7 @@ POST /chat  { query, conversation_id?, top_k, vault_id?, llm_profile? }
 ```
 
 前端用 `fetch` 读 stream（`EventSource` 无法带鉴权头）。
+全部知识库模式会在来源中标记 vault 名称；无已索引 vault 时返回 `409`。
 
 ---
 
@@ -323,7 +328,7 @@ sync_runs(id PK, user_id, vault_id, trigger, mode, dry_run,
 
 > 字段级语义、列表字段解析坑、派生方法见 **M01 基础框架与配置**；部署形态相关见 **M10 部署方案**。
 
-**模型配置不在 `.env`**：LLM / Embedding / ASR 三类全部落 `model_profiles` 表，由前端「模型」页
+**模型配置不在 `.env`**：LLM / Embedding / ASR / Reranker 全部落 `model_profiles` 表，由前端「模型」页
 或 `POST /api/v1/models` 配置（§10 模块索引 M08）。表为空时问答 / 索引 / 语音转写一律返回 `409` 并提示去配置页 ——
 **没有 `.env` 兜底**，避免同一件事出现两处真相。
 
@@ -331,7 +336,7 @@ sync_runs(id PK, user_id, vault_id, trigger, mode, dry_run,
 
 | 分组 | 字段 |
 |---|---|
-| 运行 | `DEBUG`、`VERSION` |
+| 运行 | `DEBUG`（版本号不在 `.env` 中：唯一真相源为 `pyproject.toml` 的 `project.version`，无源码产物时用 `APP_VERSION` 覆盖） |
 | 摄取过滤 | `INGEST_EXTS`（默认 `md,txt,docx,pdf`）、`INGEST_EXCLUDE_DIRS`（默认排除 `node_modules` / `.git` / `.obsidian` / `.trash` / `__pycache__` / `.venv`） |
 | 变更管理 | `INGEST_SYNC_INTERVAL`（定时同步秒数，0=关）、`INGEST_SYNC_ON_STARTUP`、`INGEST_SETTLE_SECONDS`、`INGEST_MAX_CONCURRENCY`、`PRUNE_ENABLED`、`PRUNE_RATIO_LIMIT`（默认 0.5）、`SYNC_RUNS_KEEP`（默认 50）、`PROGRESS_FLUSH_MS`（进度落库最小间隔，默认 500；阶段跳变与终态强制写）、`WATCH_ENABLED`、`WATCH_DEBOUNCE_MS`、`MAX_FILE_SIZE`（详见 M03 §8 / M01 §5.2） |
 | 存储 | `CHROMA_DIR`、`SQLITE_PATH` |
@@ -409,4 +414,3 @@ sync_runs(id PK, user_id, vault_id, trigger, mode, dry_run,
 | M10 | 部署方案 | **P9** | 本地 / Docker、数据卷、反代要点、远程访问强制检查单、容量估算 |
 | M11 | 多格式解析与过滤 | **P10** | 类型矩阵、各格式解析要点、启用路径（md/txt/docx/pdf/xlsx 已实现） |
 | 附录 A | 测试策略与质量保障 | 贯穿 | 测试分层、mock 契约、样本数据、质量门禁、回归清单 |
-

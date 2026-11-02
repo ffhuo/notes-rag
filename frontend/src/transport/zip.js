@@ -71,7 +71,7 @@ function isExcluded(path, rules, prefixes) {
   return rules.some((rule) => globToRegExp(rule).test(path))
 }
 
-/** 隐藏目录不打包：与服务端扫描一致（`d.startswith(".")` 的目录整棵跳过）。 */
+/** 隐藏目录不打包：服务端扫描会剪掉 `.` 开头的目录（sync_service._scan），传上去永远读不到。 */
 function hasHiddenDir(path) {
   return path
     .split('/')
@@ -80,12 +80,25 @@ function hasHiddenDir(path) {
 }
 
 /**
- * 待打包清单：丢掉系统垃圾、隐藏目录，以及被 filters 排除的文件。
+ * 单文件大小上限（字节）。表单态给 `maxKb`（KB），落库态给 `max_file_size`（字节），两种都要能吃。
+ * 取不到或非正数 → 0，表示不限。
+ */
+function maxBytes(filters) {
+  const kb = Number(filters?.maxKb)
+  if (Number.isFinite(kb) && kb > 0) return Math.round(kb * 1024)
+  const bytes = Number(filters?.max_file_size)
+  return Number.isFinite(bytes) && bytes > 0 ? bytes : 0
+}
+
+/**
+ * 待打包清单：丢掉系统垃圾、隐藏目录，以及被 filters 排除或超限的文件。
  *
  * 排除项在**打包前**就剔除，而不是只让后端索引时跳过 —— 被过滤的内容没有
  * 上传价值，传上去既浪费带宽与磁盘，重新同步时还要再扫一遍。
- * 注意：单文件大小上限（max_file_size）仍只在索引阶段生效 —— 大文件可能
- * 被 get_note 或图片处理读取，不能在打包时就丢掉。
+ * 清单与服务端扫描的可见范围对齐：
+ *   · `.` 开头的**目录**服务端不遍历 → 这里整棵剔除；
+ *   · `.` 开头的**文件**服务端照常遍历（是否入库看扩展名）→ 照常打包；
+ *   · `max_file_size` 服务端扫描时跳过 → 这里也不入包。
  *
  * 返回的文件已剥掉「所选文件夹名」这一层，path 即 vault 根下的相对路径。
  */
@@ -94,12 +107,14 @@ function buildList(files, filters) {
   const strip = topSegment(raw)
   const rules = excludeRules(filters)
   const prefixes = dirPrefixes(rules)
+  const limit = maxBytes(filters)
 
   const list = []
   for (const file of raw) {
     let path = relOf(file)
     if (strip && path.startsWith(`${strip}/`)) path = path.slice(strip.length + 1)
     if (!path || hasHiddenDir(path) || isExcluded(path, rules, prefixes)) continue
+    if (limit && (file.size || 0) > limit) continue
     list.push({ file, path })
   }
   return list

@@ -13,6 +13,7 @@
 - POST   /api/v1/vaults/upload                 # multipart: name + file=.zip（source_type=uploaded）
 - GET    /api/v1/vaults/browse                 # ?path=<绝对路径>&rel=<相对子路径> 列一层子目录（目录树懒加载）
 - GET    /api/v1/vaults/{id}
+- GET    /api/v1/vaults/{id}/files              # 符合摄取过滤条件的文件清单（分页）
 - PATCH  /api/v1/vaults/{id}                   # 改 name / filters（source_value 不可改）
 - DELETE /api/v1/vaults/{id}
 - POST   /api/v1/vaults/{id}/sync              # 202 RunSubmitResponse（body: SyncRequest）
@@ -51,7 +52,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user_id, get_settings
 from app.core.config import Settings
 from app.core.database import get_session
-from app.models import SyncRun, Vault
+from app.models import Note, SyncRun, Vault
 from app.models.schemas import (
     DoctorReport,
     IngestFilters,
@@ -61,6 +62,8 @@ from app.models.schemas import (
     SyncResult,
     SyncRunDetail,
     SyncRunOut,
+    VaultFileOut,
+    VaultFilesOut,
     VaultBrowseEntry,
     VaultBrowseOut,
     VaultCreate,
@@ -68,7 +71,7 @@ from app.models.schemas import (
     VaultUpdate,
 )
 from app.rag.vectorstore import VectorStore
-from app.repositories import sync_repo, vault_repo
+from app.repositories import note_repo, sync_repo, vault_repo
 from app.services import run_service, sync_service, vault_service
 from app.services.ingest_service import ENV_PROFILE_PLACEHOLDER
 from app.services.model_service import (
@@ -136,7 +139,11 @@ def _epoch_ms(dt: datetime | None) -> int | None:
     return int(dt.timestamp() * 1000)
 
 
-def _vault_out(vault: Vault) -> VaultOut:
+def _vault_out(
+    vault: Vault,
+    indexed_file_count: int = 0,
+    chunk_count: int = 0,
+) -> VaultOut:
     """Vault → VaultOut（datetime → 毫秒时间戳，JSON 列 → 列表）。"""
     return VaultOut(
         id=vault.id,
@@ -149,6 +156,8 @@ def _vault_out(vault: Vault) -> VaultOut:
         filters=_vault_filters(vault),
         embed_profile_id=vault.embed_profile_id,
         embed_indexed_profiles=_indexed_profiles(vault),
+        indexed_file_count=indexed_file_count,
+        chunk_count=chunk_count,
     )
 
 
@@ -238,6 +247,24 @@ def _run_detail(run: SyncRun) -> SyncRunDetail:
     return SyncRunDetail(**payload)
 
 
+def _file_index_status(
+    rel_path: str,
+    size_bytes: int,
+    mtime_ns: int,
+    note: Note | None,
+    current_item: str | None,
+    failed_paths: set[str],
+) -> str:
+    """按同步使用的 size/mtime 快判规则推导文件状态。"""
+    if rel_path == current_item:
+        return "indexing"
+    if rel_path in failed_paths:
+        return "error"
+    if note is not None and note.size_bytes == size_bytes and note.mtime_ns == mtime_ns:
+        return "indexed"
+    return "pending"
+
+
 # ===== 归属校验 =====
 
 
@@ -271,7 +298,11 @@ async def list_vaults(
 ):
     """列出当前用户的 vault。"""
     vaults = await vault_repo.list_vaults(session, user_id)
-    return [_vault_out(v) for v in vaults]
+    counts = await note_repo.indexed_counts_by_vault(session, [v.id for v in vaults])
+    return [
+        _vault_out(v, *counts.get(v.id, (0, 0)))
+        for v in vaults
+    ]
 
 
 @router.post("", response_model=VaultOut, status_code=status.HTTP_201_CREATED)
@@ -496,6 +527,94 @@ async def get_vault(
     """vault 详情（含 *last_sync_* / embed_indexed_profiles 等状态；状态只在作业成功后回写）。"""
     vault = await _get_vault_or_404(session, vault_id, user_id)
     return _vault_out(vault)
+
+
+@router.get("/{vault_id}/files", response_model=VaultFilesOut)
+async def list_vault_files(
+    vault_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    search: str = Query(default="", max_length=300),
+    file_status: str = Query(default="all", alias="status"),
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    """列出源目录中通过索引过滤规则的文件，并按当前索引状态分页。"""
+    if file_status not in {"all", "indexed", "indexing", "pending", "error"}:
+        raise HTTPException(status_code=422, detail="不支持的文件状态筛选")
+
+    vault = await _get_vault_or_404(session, vault_id, user_id)
+    try:
+        root = vault_service.resolve_local_path(vault, settings)
+    except SourceUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+
+    try:
+        seen, scan_complete = await asyncio.to_thread(
+            sync_service.scan_files, root, _vault_filters(vault), settings
+        )
+    except OSError as e:
+        logger.exception("读取 vault 文件清单失败", vault_id=vault_id)
+        raise HTTPException(status_code=503, detail="无法读取知识库文件清单") from e
+
+    notes = await note_repo.list_note_paths(session, vault.id)
+    active_run = await sync_repo.find_active_run(session, vault.id)
+    latest_runs = await sync_repo.list_sync_runs(session, vault.id, limit=1)
+    latest_run = latest_runs[0] if latest_runs else None
+    failed_paths: set[str] = set()
+    if latest_run and latest_run.status in _TERMINAL_STATUSES:
+        failed_files = _load_detail(latest_run.detail_json).get("failed_files") or []
+        if isinstance(failed_files, list):
+            failed_paths = {
+                item["path"]
+                for item in failed_files
+                if isinstance(item, dict) and isinstance(item.get("path"), str)
+            }
+
+    search_term = search.strip().casefold()
+    counts = {"indexed": 0, "indexing": 0, "pending": 0, "error": 0}
+    matching_files: list[VaultFileOut] = []
+    current_item = active_run.current_item if active_run else None
+
+    for rel_path, sig in seen.items():
+        note = notes.get(rel_path)
+        item_status = _file_index_status(
+            rel_path,
+            sig.size_bytes,
+            sig.mtime_ns,
+            note,
+            current_item,
+            failed_paths,
+        )
+        counts[item_status] += 1
+
+        if file_status != "all" and item_status != file_status:
+            continue
+        if search_term and search_term not in rel_path.casefold():
+            continue
+
+        matching_files.append(
+            VaultFileOut(
+                path=rel_path,
+                name=Path(rel_path).name,
+                size_bytes=sig.size_bytes,
+                modified_at=sig.mtime_ns // 1_000_000,
+                indexed_at=_epoch_ms(note.indexed_at) if note else None,
+                status=item_status,
+            )
+        )
+
+    matching_files.sort(key=lambda item: item.path.casefold())
+    offset = (page - 1) * page_size
+    return VaultFilesOut(
+        files=matching_files[offset:offset + page_size],
+        total=len(matching_files),
+        page=page,
+        page_size=page_size,
+        counts=counts,
+        scan_complete=scan_complete,
+    )
 
 
 @router.patch("/{vault_id}", response_model=VaultOut)

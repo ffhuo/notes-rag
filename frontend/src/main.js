@@ -5,6 +5,7 @@ import router from './router'
 // 设计令牌与基础样式（顺序：令牌定义在前，基线在后）
 import './styles/tokens.css'
 import './styles/base.css'
+import './demo/demo.css'
 
 import { initTheme } from './theme'
 

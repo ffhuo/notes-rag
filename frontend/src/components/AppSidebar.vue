@@ -21,10 +21,23 @@ const props = defineProps({
 const emit = defineEmits(['toggle-collapse', 'close-mobile'])
 
 const route = useRoute()
-const items = computed(() => NAV_ITEMS.map((n) => ({ ...n, active: route.name === n.name })))
+const hints = {
+  vaults: '文件与集合',
+  tasks: '索引与同步',
+  search: '语义搜索',
+  chat: '对话与引用',
+  models: 'LLM · Embed · ASR',
+  keys: 'MCP 与授权',
+}
+const items = computed(() => NAV_ITEMS.map((n) => ({
+  ...n,
+  active: route.name === n.name,
+  hint: hints[n.name],
+})))
 
 /** 当前身份名（多用户为账号名；单用户为合成身份 default）。 */
 const userName = computed(() => authState.user?.username || '当前用户')
+const userInitial = computed(() => userName.value.trim().charAt(0).toUpperCase() || 'N')
 
 /**
  * 产品版本号（如 v1.0）。
@@ -48,60 +61,71 @@ onMounted(async () => {
 
 <template>
   <aside
-    class="app-sidebar"
+    class="app-sidebar demo-sidebar"
     :class="{ 'is-collapsed': collapsed, 'is-open': mobileOpen }"
   >
-    <div class="app-sidebar__head">
-      <RouterLink class="app-sidebar__brand" to="/vaults" @click="emit('close-mobile')">
-        <span class="app-sidebar__logo">n</span>
-        <span class="app-sidebar__brand-text">notes-rag</span>
+    <div class="demo-sidebar__head">
+      <RouterLink class="demo-brand" to="/vaults" @click="emit('close-mobile')">
+        <span class="demo-brand__mark" aria-hidden="true">n</span>
+        <span class="demo-brand__copy">
+          <strong>notes-rag</strong>
+          <small>PERSONAL KNOWLEDGE</small>
+        </span>
         <span v-if="version" class="app-sidebar__version" :title="`当前服务版本 ${version}`">{{ version }}</span>
       </RouterLink>
-
       <button
         type="button"
-        class="app-sidebar__collapse"
+        class="demo-icon-button app-sidebar__collapse"
         :title="collapsed ? '展开侧栏' : '折叠侧栏'"
         :aria-label="collapsed ? '展开侧栏' : '折叠侧栏'"
         :aria-expanded="!collapsed"
         @click="emit('toggle-collapse')"
       >
-        <AppIcon :name="collapsed ? 'chevron-right' : 'chevron-left'" :size="16" />
+        <AppIcon :name="collapsed ? 'chevron-right' : 'chevron-left'" :size="15" />
       </button>
     </div>
 
-    <nav class="app-sidebar__nav">
+    <div class="demo-sidebar__section-label">工作空间</div>
+    <nav class="demo-nav" aria-label="工作空间">
       <RouterLink
         v-for="item in items"
         :key="item.name"
-        class="app-nav-item"
+        class="demo-nav__item"
         :class="{ 'is-active': item.active }"
         :to="item.to"
         :title="collapsed ? item.label : ''"
         :aria-current="item.active ? 'page' : undefined"
         @click="emit('close-mobile')"
       >
-        <span class="app-nav-item__indicator"></span>
-        <AppIcon class="app-nav-item__icon" :name="item.icon" :size="20" />
-        <span class="app-nav-item__label">{{ item.label }}</span>
+        <AppIcon :name="item.icon" :size="19" />
+        <span class="demo-nav__copy">
+          <strong>{{ item.label }}</strong>
+          <small>{{ item.hint }}</small>
+        </span>
       </RouterLink>
     </nav>
 
+    <div class="demo-sidebar__spacer"></div>
+    <AppJobStatus class="demo-health-card" :collapsed="collapsed" />
     <div class="app-sidebar__foot">
-      <AppJobStatus :collapsed="collapsed" />
       <AppThemePicker :collapsed="collapsed" />
 
       <!-- 退出登录：仅在确有凭据可清时出现（单用户免鉴权模式没有账号概念，不显示） -->
-      <div v-if="canLogout" class="app-sidebar__user">
-        <span class="app-sidebar__user-name" :title="userName">{{ userName }}</span>
+      <div class="demo-user">
+        <span class="demo-user__avatar" aria-hidden="true">{{ userInitial }}</span>
+        <span class="demo-user__name" :title="userName">
+          <strong>{{ userName }}</strong>
+          <small>{{ canLogout ? '已登录' : '个人工作区' }}</small>
+        </span>
         <button
+          v-if="canLogout"
           type="button"
-          class="app-sidebar__logout"
-          :title="collapsed ? '退出登录' : ''"
+          class="demo-icon-button app-sidebar__logout"
+          :title="collapsed ? '退出登录' : '退出登录'"
           aria-label="退出登录"
           @click="logout"
         >
-          <AppIcon name="logout" :size="18" />
+          <AppIcon name="logout" :size="16" />
         </button>
       </div>
     </div>
@@ -110,264 +134,173 @@ onMounted(async () => {
 
 <style scoped>
 .app-sidebar {
-  /* 桌面：脱离文档流固定在左侧（规范 §6.1：不用 sticky，改 fixed + 占位）。
-     宽度占位由 App.vue 的 .app-shell__sidebar-holder 承担，主内容不会被盖住。 */
   position: fixed;
   top: 0;
   left: 0;
   bottom: 0;
-  z-index: 10;
-  width: var(--sidebar-width);
+  z-index: 30;
+  width: var(--demo-sidebar-width, 242px);
   display: flex;
   flex-direction: column;
-  background: var(--color-bg-surface);
-  border-right: var(--border-width) solid var(--color-border);
+  overflow-y: auto;
+  padding: 18px 15px 12px;
+  background: var(--ui-surface);
+  border-right: 1px solid var(--ui-border);
+  transition: width 0.18s ease, transform 0.2s ease;
 }
 
-/* ---------- 品牌与折叠开关 ---------- */
-.app-sidebar__head {
+.demo-sidebar__head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  flex: none;
-  height: var(--topbar-height);
-  padding: 0 var(--space-3);
-  border-bottom: var(--border-width) solid var(--color-border);
-}
-
-.app-sidebar__brand {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  color: var(--color-text-primary);
-  text-decoration: none;
-}
-.app-sidebar__brand:hover {
-  color: var(--color-text-primary);
-  text-decoration: none;
-}
-
-.app-sidebar__logo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-md);
-  background: var(--color-primary);
-  color: var(--color-primary-contrast);
-  font-size: var(--font-size-sm);
-  line-height: 1;
-  font-weight: var(--font-weight-semibold);
-}
-
-.app-sidebar__brand-text {
-  overflow: hidden;
-  font-size: var(--font-size-h2);
-  line-height: var(--line-height-h2);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-primary);
-  white-space: nowrap;
-  transition: opacity var(--duration-base) var(--ease-standard),
-              transform var(--duration-base) var(--ease-standard);
-}
-
-/* 版本号胶囊：紧跟品牌名，弱化配色避免抢焦点 */
-.app-sidebar__version {
-  flex: none;
-  padding: 0 var(--space-2);
-  border-radius: 999px;
-  background: var(--color-bg-subtle);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-caption);
-  line-height: 18px;
-  white-space: nowrap;
+  justify-content: space-between;
+  min-height: 43px;
+  margin-bottom: 5px;
 }
 
 .app-sidebar__collapse {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 28px;
-  height: 28px;
-  margin-left: auto;
-  padding: 0;
-  border: var(--border-width) solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  transition: background-color var(--duration-fast) var(--ease-standard),
-              color var(--duration-fast) var(--ease-standard);
-}
-.app-sidebar__collapse:hover {
-  background: var(--color-bg-subtle);
-  border-color: var(--color-border);
-  color: var(--color-text-primary);
-}
-
-/* ---------- 导航 ---------- */
-.app-sidebar__nav {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--space-3) var(--space-3);
-}
-
-.app-nav-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3) var(--space-2) 0;
-  border-radius: var(--radius-md);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-body);
-  line-height: var(--line-height-body);
-  text-decoration: none;
-  transition: background-color var(--duration-fast) var(--ease-standard),
-              color var(--duration-fast) var(--ease-standard);
-}
-.app-nav-item:hover {
-  background: var(--color-bg-subtle);
-  color: var(--color-text-primary);
-  text-decoration: none;
-}
-
-/* active 态必须显式（规范 §3.3）：3px 主色指示条 + 主色浅底 + 文字转主色 */
-.app-nav-item.is-active {
-  background: var(--color-primary-soft);
-  color: var(--color-primary-on-soft);
-  font-weight: var(--font-weight-semibold);
-}
-
-.app-nav-item__indicator {
-  flex: none;
-  width: 3px;
-  height: 20px;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: transparent;
-}
-.app-nav-item.is-active .app-nav-item__indicator {
-  background: var(--color-primary);
-}
-
-.app-nav-item__icon {
   flex: none;
 }
 
-.app-nav-item__label {
-  overflow: hidden;
-  white-space: nowrap;
-  transition: opacity var(--duration-base) var(--ease-standard),
-              transform var(--duration-base) var(--ease-standard);
+.demo-health-card {
+  flex: none;
+  background: var(--ui-surface-soft);
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
 }
 
-/* ---------- 底部：作业状态 + 主题入口 ---------- */
 .app-sidebar__foot {
   flex: none;
-  display: flex;
-  flex-direction: column;
-  padding: 0 var(--space-3) var(--space-3);
+  margin-top: 9px;
 }
 
-/* ---------- 底部：当前身份 + 退出登录 ---------- */
-.app-sidebar__user {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border-top: var(--border-width) solid var(--color-border);
-}
-
-.app-sidebar__user-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-sm);
+.app-sidebar__version {
+  flex: none;
+  color: var(--ui-muted);
+  font-size: 8px;
 }
 
 .app-sidebar__logout {
   flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: var(--border-width) solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: background-color var(--duration-fast) var(--ease-standard),
-              color var(--duration-fast) var(--ease-standard);
-}
-.app-sidebar__logout:hover {
-  background: var(--color-bg-subtle);
-  border-color: var(--color-border);
-  color: var(--color-primary);
 }
 
-/* ---------- 折叠态（T1.3）：宽度瞬变，标签淡出（规范 §2.7 只过渡 opacity/transform） ---------- */
 .app-sidebar.is-collapsed {
-  width: var(--sidebar-width-collapsed);
+  width: 64px;
+  padding-right: 8px;
+  padding-left: 8px;
 }
 
-.is-collapsed .app-sidebar__brand-text,
+.is-collapsed .demo-brand {
+  justify-content: center;
+  padding: 0;
+}
+
+.is-collapsed .demo-brand__copy,
 .is-collapsed .app-sidebar__version,
-.is-collapsed .app-sidebar__collapse {
-  display: none;
-}
-.is-collapsed .app-sidebar__head {
-  justify-content: center;
-  padding: 0 var(--space-2);
-}
-
-.is-collapsed .app-nav-item {
-  justify-content: center;
-  gap: 0;
-  padding: var(--space-2);
-}
-.is-collapsed .app-nav-item__indicator,
-.is-collapsed .app-nav-item__label {
-  display: none;
-}
-.is-collapsed .app-sidebar__foot {
-  padding: 0 var(--space-2) var(--space-2);
-}
-
-/* 折叠成图标条：只留退出图标（title 提供说明），身份名隐藏 */
-.is-collapsed .app-sidebar__user {
-  justify-content: center;
-  padding: var(--space-2);
-}
-.is-collapsed .app-sidebar__user-name {
+.is-collapsed .app-sidebar__collapse,
+.is-collapsed .demo-sidebar__section-label,
+.is-collapsed .demo-nav__copy,
+.is-collapsed .demo-user__name,
+.is-collapsed .demo-user__avatar {
   display: none;
 }
 
-/* ---------- 移动端抽屉（T1.4，sm 断点 0–767px） ----------
-   基础规则已是 fixed，这里只覆盖抽屉态需要的宽度 / 位移 / 层级。 */
+.is-collapsed .demo-nav__item {
+  justify-content: center;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.is-collapsed .demo-health-card {
+  display: block;
+}
+
+.is-collapsed .demo-health-card :deep(.job-status__btn) {
+  justify-content: center;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.is-collapsed .app-sidebar__foot :deep(.theme-picker) {
+  align-items: center;
+  padding: 8px 0 0;
+}
+
+.demo-health-card :deep(.job-status__btn) {
+  width: 100%;
+  min-height: 48px;
+  padding: 8px;
+  border-color: transparent;
+}
+
+.demo-health-card :deep(.job-status__title) {
+  font-size: 9px;
+}
+
+.demo-health-card :deep(.job-status__meta),
+.demo-health-card :deep(.job-status__vault) {
+  font-size: 8px;
+}
+
+.app-sidebar__foot :deep(.theme-picker) {
+  gap: 8px;
+  padding: 12px 5px 8px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.app-sidebar__foot :deep(.theme-picker__label) {
+  width: 36px;
+  font-size: 8px;
+}
+
+.app-sidebar__foot :deep(.theme-picker__swatch) {
+  width: 21px;
+  height: 21px;
+}
+
+.app-sidebar__foot :deep(.theme-picker__dot) {
+  width: 13px;
+  height: 13px;
+}
+
+.app-sidebar__foot :deep(.theme-picker__seg-btn) {
+  width: 27px;
+  height: 24px;
+}
+
+.app-sidebar__foot :deep(.theme-picker.is-collapsed) {
+  justify-content: space-evenly;
+  padding: 5px 0;
+  border-top: 0;
+}
+
+.demo-user {
+  min-width: 0;
+}
+
+.demo-user__name {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.demo-user__name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 767px) {
   .app-sidebar,
   .app-sidebar.is-collapsed {
-    z-index: 30;
-    width: 280px;
-    max-width: 84%;
+    width: min(280px, 84vw);
+    max-width: 84vw;
     transform: translateX(-100%);
-    transition: transform var(--duration-slow) var(--ease-standard);
     box-shadow: var(--shadow-lg);
   }
+
   .app-sidebar.is-open {
     transform: translateX(0);
   }
-  /* 抽屉态由遮罩/汉堡关闭，折叠按钮无意义 */
+
   .app-sidebar__collapse {
     display: none;
   }

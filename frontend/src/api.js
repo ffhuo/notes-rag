@@ -105,6 +105,15 @@ export const vaultsApi = {
   create: (payload) => apiFetch('/vaults', { method: 'POST', body: JSON.stringify(payload) }),
   get: (id) => apiFetch(`/vaults/${id}`),
   remove: (id) => apiFetch(`/vaults/${id}`, { method: 'DELETE' }),
+  listFiles: (id, params = {}) => {
+    const query = new URLSearchParams({
+      page: String(params.page || 1),
+      page_size: String(params.page_size || 20),
+      search: params.search || '',
+      status: params.status || 'all',
+    })
+    return apiFetch(`/vaults/${id}/files?${query}`)
+  },
 
   /** 改 name / filters（source_value 不可改）；filters 传 null = 清空过滤。 */
   update: (id, patch) => apiFetch(`/vaults/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),

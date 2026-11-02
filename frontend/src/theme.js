@@ -19,11 +19,6 @@ export const BRANDS = [
   { id: 'violet', label: '紫罗兰' },
 ]
 
-export const SCHEMES = [
-  { id: 'light', label: '浅色' },
-  { id: 'dark', label: '深色' },
-]
-
 const DEFAULT_BRAND = 'blue'
 
 /* ---------- 存储（跨端时替换本段即可） ---------- */

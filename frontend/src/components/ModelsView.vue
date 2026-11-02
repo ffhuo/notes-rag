@@ -20,18 +20,19 @@ import AppIcon from './AppIcon.vue'
 import AppInput from './AppInput.vue'
 import AppModal from './AppModal.vue'
 import AppSelect from './AppSelect.vue'
-import AppTable from './AppTable.vue'
 
 const TABS = [
   { value: 'llm', label: 'LLM 对话模型' },
   { value: 'embed', label: 'Embedding 向量模型' },
   { value: 'asr', label: '语音识别' },
+  { value: 'rerank', label: 'Reranker 重排模型' },
 ]
 
 const KIND_OPTIONS = [
   { value: 'llm', label: 'llm（对话 / 问答）' },
   { value: 'embed', label: 'embed（向量化）' },
   { value: 'asr', label: 'asr（语音转文字）' },
+  { value: 'rerank', label: 'rerank（检索重排）' },
 ]
 
 // asr 的调用协议：不同厂商的语音接口不是同一套（详见 app/api/routes/audio.py）。
@@ -41,12 +42,9 @@ const ASR_PROTOCOL_OPTIONS = [
   { value: 'dashscope_native', label: 'DashScope 原生（百炼 Qwen-Audio-3.x-ASR-Flash）' },
 ]
 
-const columns = [
-  { key: 'name', label: '名称', sortable: true },
-  { key: 'model', label: '模型标识', mono: true },
-  { key: 'base_url', label: '端点', mono: true },
-  { key: 'api_key_masked', label: '密钥', mono: true },
-  { key: 'is_default', label: '默认' },
+const RERANK_PROTOCOL_OPTIONS = [
+  { value: 'siliconflow', label: '硅基流动' },
+  { value: 'cohere', label: 'Cohere' },
 ]
 
 const models = ref([])
@@ -76,7 +74,7 @@ function blankForm() {
     base_url: '',
     api_key: '',
     set_default: false,
-    protocol: '',   // 仅 asr 用：'' = OpenAI ASR，'dashscope_native' = 百炼原生协议
+    protocol: '',   // asr / rerank 的 provider 协议标识
     multimodal: false,  // 仅 llm 用：是否支持图片输入（params.multimodal）
     params: {},     // 编辑时承接后端已有 params，保存时按类型增删对应键
   }
@@ -102,13 +100,6 @@ async function load() {
 onMounted(() => {
   setTopbarActions([
     {
-      key: 'create',
-      comp: AppButton,
-      props: { variant: 'primary', icon: 'plus' },
-      on: { click: () => openCreate() },
-      text: '新建模型',
-    },
-    {
       key: 'refresh',
       comp: AppButton,
       props: { variant: 'secondary', icon: 'refresh' },
@@ -127,6 +118,7 @@ const counts = computed(() => ({
   llm: models.value.filter((m) => m.kind === 'llm').length,
   embed: models.value.filter((m) => m.kind === 'embed').length,
   asr: models.value.filter((m) => m.kind === 'asr').length,
+  rerank: models.value.filter((m) => m.kind === 'rerank').length,
 }))
 
 const visible = computed(() => {
@@ -170,7 +162,11 @@ const blockedCount = computed(
 /* ---------- 新建 / 编辑 ---------- */
 
 function openCreate() {
-  form.value = { ...blankForm(), kind: activeKind.value }
+  form.value = {
+    ...blankForm(),
+    kind: activeKind.value,
+    protocol: activeKind.value === 'rerank' ? 'siliconflow' : '',
+  }
   formError.value = ''
   editing.value = true
 }
@@ -184,7 +180,7 @@ function openEdit(m) {
     base_url: m.base_url || '',
     api_key: '',
     set_default: !!m.is_default,
-    protocol: m.params?.protocol === 'dashscope_native' ? 'dashscope_native' : '',
+    protocol: m.params?.protocol || '',
     multimodal: !!m.params?.multimodal,
     params: { ...(m.params || {}) },
   }
@@ -216,6 +212,12 @@ async function save() {
       // 勾选 = 支持图片输入：索引时会调用该模型理解笔记里的图片
       if (f.multimodal) params.multimodal = true
       else delete params.multimodal
+    } else if (f.kind === 'rerank') {
+      if (!['siliconflow', 'cohere'].includes(f.protocol)) {
+        formError.value = '请选择 reranker 协议'
+        return
+      }
+      params = { ...(f.params || {}), protocol: f.protocol }
     }
 
     if (f.id) {
@@ -299,15 +301,24 @@ async function doRemove() {
 
 <template>
   <section class="models">
-    <header class="models__intro">
-      <h2 class="models__title">模型管理</h2>
-      <p class="models__desc">
-        LLM 无状态，问答时可随时换；<strong>Embedding 与索引强绑定</strong>，换模型后必须对相关
-        vault 重建索引，否则新旧向量会混在一起。
-      </p>
+    <header class="page-intro">
+      <div>
+        <div class="eyebrow"><span class="eyebrow__dot"></span> MODEL CONFIGURATION</div>
+        <h1>为每类任务选择合适模型</h1>
+        <p>管理对话、向量化、语音识别与检索重排模型配置。</p>
+      </div>
+      <AppButton variant="primary" icon="plus" @click="openCreate">新建模型</AppButton>
     </header>
 
-    <!-- Tabs：两个 kind 各自一张表（规范 §5.5） -->
+    <p class="models__warning">
+      <AppIcon name="info" :size="15" />
+      <span>
+        <strong>Embedding：</strong>更换向量模型后需要重建索引。
+        <strong>Reranker：</strong>设为默认后会自动用于 Search 和 Chat；未配置时保持向量排序，调用失败会自动降级。
+      </span>
+    </p>
+
+    <!-- Each model kind has its own configuration list. -->
     <div class="models__tabs" role="tablist">
       <button
         v-for="t in TABS"
@@ -350,92 +361,75 @@ async function doRemove() {
       </span>
     </p>
 
-    <AppTable
-      :columns="columns"
-      :rows="visible"
-      :loading="loading && !models.length"
-      row-key="id"
-      sortable
-      empty-text="暂无配置"
-      empty-icon="models"
-    >
-      <template #cell-name="{ row }">
-        <span class="models__name-cell">
-          <span class="models__name">{{ row.name }}</span>
-          <span v-if="row.kind === 'llm' && row.params?.multimodal" class="models__tag">
-            支持图片
-          </span>
-        </span>
-      </template>
-
-      <template #cell-base_url="{ row }">
-        <span class="models__muted">{{ row.base_url || '（OpenAI 官方端点）' }}</span>
-      </template>
-
-      <template #cell-api_key_masked="{ row }">
-        <span class="models__muted">{{ row.api_key_masked || '（未设置）' }}</span>
-      </template>
-
-      <!-- 默认项：图标 + 文本双编码（不靠颜色单独表意） -->
-      <template #cell-is_default="{ row }">
-        <span v-if="row.is_default" class="models__default">
-          <AppIcon name="star" :size="14" />
-          <span>默认</span>
-        </span>
-        <AppButton
-          v-else
-          variant="ghost"
-          size="sm"
-          @click="makeDefault(row)"
-        >
-          设为默认
-        </AppButton>
-      </template>
-
-      <template #empty>
-        <AppEmptyState
-          v-if="!counts[activeKind]"
-          size="sm"
-          icon="models"
-          title="还没有这类模型"
-          description="新建一个配置即可用于问答、索引或语音转写。"
-          action-text="新建模型"
-          action-icon="plus"
-          @action="openCreate"
-        />
-        <AppEmptyState
-          v-else
-          size="sm"
-          icon="search"
-          title="没有匹配的模型"
-          description="试试放宽筛选条件。"
-        />
-      </template>
-
-      <template #row-actions="{ row }">
-        <span class="models__row-actions">
-          <AppButton
-            variant="secondary"
-            size="sm"
-            :loading="testingId === row.id"
-            @click="testOne(row)"
-          >
-            试连
-          </AppButton>
-          <AppButton variant="secondary" size="sm" @click="openEdit(row)">编辑</AppButton>
-          <AppButton
-            variant="danger"
-            size="sm"
-            icon="trash"
-            :disabled="!!blockReason(row)"
-            :title="blockReason(row) || '删除该配置'"
-            @click="askRemove(row)"
-          >
-            删除
-          </AppButton>
-        </span>
-      </template>
-    </AppTable>
+    <section class="models__list panel">
+      <header class="models__list-heading">
+        <div><h2>{{ TABS.find((tab) => tab.value === activeKind)?.label }}</h2><p>{{ visible.length }} 个配置</p></div>
+        <span>配置详情</span>
+      </header>
+      <div v-if="loading && !models.length" class="models__list-state">
+        <AppIcon name="loader" :size="18" />正在加载模型配置…
+      </div>
+      <AppEmptyState
+        v-else-if="!visible.length"
+        size="sm"
+        :icon="filtered ? 'search' : 'models'"
+        :title="filtered ? '没有匹配的模型' : '还没有这类模型'"
+        :description="filtered ? '试试放宽筛选条件。' : '新建一个配置即可用于问答、索引或语音转写。'"
+        :action-text="!filtered ? '新建模型' : ''"
+        action-icon="plus"
+        @action="openCreate"
+      />
+      <div v-else class="models__rows">
+        <article v-for="row in visible" :key="row.id" class="models__row">
+          <span class="models__row-icon"><AppIcon name="models" :size="18" /></span>
+          <div class="models__row-main">
+            <div class="models__row-title">
+              <strong>{{ row.name }}</strong>
+              <span v-if="row.is_default" class="models__default"><AppIcon name="star" :size="13" />默认</span>
+              <span v-if="row.kind === 'llm' && row.params?.multimodal" class="models__tag">支持图片</span>
+              <span v-if="row.kind === 'rerank'" class="models__tag">
+                {{ row.params?.protocol === 'cohere' ? 'Cohere' : '硅基流动' }}
+              </span>
+            </div>
+            <code class="models__row-model">{{ row.model }}</code>
+            <div class="models__row-meta">
+              <span><small>端点</small>{{ row.base_url || 'OpenAI 官方端点' }}</span>
+              <span><small>密钥</small><code>{{ row.api_key_masked || '未设置' }}</code></span>
+            </div>
+            <p v-if="blockReason(row)" class="models__row-warning">{{ blockReason(row) }}</p>
+          </div>
+          <div class="models__row-actions">
+            <AppButton
+              v-if="!row.is_default"
+              variant="secondary"
+              size="sm"
+              @click="makeDefault(row)"
+            >
+              设为默认
+            </AppButton>
+            <AppButton
+              variant="secondary"
+              size="sm"
+              :loading="testingId === row.id"
+              @click="testOne(row)"
+            >
+              试连
+            </AppButton>
+            <AppButton variant="secondary" size="sm" @click="openEdit(row)">编辑</AppButton>
+            <AppButton
+              variant="danger"
+              size="sm"
+              icon="trash"
+              :disabled="!!blockReason(row)"
+              :title="blockReason(row) || '删除该配置'"
+              @click="askRemove(row)"
+            >
+              删除
+            </AppButton>
+          </div>
+        </article>
+      </div>
+    </section>
 
     <!-- 新建 / 编辑（kind 在编辑时不可改：后端 PATCH 不接受 kind） -->
     <AppModal v-model="editing" :title="form.id ? '编辑模型配置' : '新建模型配置'">
@@ -459,8 +453,8 @@ async function doRemove() {
           v-model="form.base_url"
           label="端点 base_url"
           mono
-          placeholder="https://api.openai.com/v1"
-          hint="留空 = 用 OpenAI 官方端点；第三方服务请填自己的地址（如 https://api.siliconflow.cn/v1）"
+          :placeholder="form.kind === 'rerank' ? (form.protocol === 'cohere' ? 'https://api.cohere.com' : 'https://api.siliconflow.cn/v1') : 'https://api.openai.com/v1'"
+          :hint="form.kind === 'rerank' ? '留空使用所选协议的官方端点；也可填写服务根地址或完整 /rerank endpoint' : '留空 = 用 OpenAI 官方端点；第三方服务请填自己的地址（如 https://api.siliconflow.cn/v1）'"
         />
         <AppInput
           v-model="form.api_key"
@@ -476,6 +470,13 @@ async function doRemove() {
           :options="ASR_PROTOCOL_OPTIONS"
           hint="OpenAI ASR 走 multipart /audio/transcriptions；百炼 qwen3-asr-flash 是对话协议（音频走 Base64），选错会直接报错"
         />
+        <AppSelect
+          v-if="form.kind === 'rerank'"
+          v-model="form.protocol"
+          label="Rerank API 协议"
+          :options="RERANK_PROTOCOL_OPTIONS"
+          hint="选择与服务端点匹配的协议；保存为默认后，Search 和 Chat 会自动重排检索候选。"
+        />
         <AppField
           v-if="form.kind === 'llm'"
           hint="勾选后，索引会把笔记里的图片交给该模型理解并转成文字（外链直传 URL，本地图读取后转 Base64）；未勾选或没有此类模型时图片会被跳过。"
@@ -488,7 +489,7 @@ async function doRemove() {
         <AppField>
           <label class="models__check">
             <input v-model="form.set_default" type="checkbox" />
-            <span>设为该类型的默认模型</span>
+            <span>设为该类型的默认模型{{ form.kind === 'rerank' ? '（自动启用检索重排）' : '' }}</span>
           </label>
         </AppField>
         <p v-if="formError" class="models__form-error">{{ formError }}</p>
@@ -618,6 +619,29 @@ async function doRemove() {
   color: var(--color-warning);
 }
 
+.models__warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--ui-text);
+  background: var(--ui-primary-soft);
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  font-size: 9px;
+  line-height: 15px;
+}
+
+.models__warning :deep(svg) {
+  flex: none;
+  color: var(--ui-primary);
+}
+
+.models__warning strong {
+  color: var(--ui-ink);
+}
+
 /* ---------- 单元格 ---------- */
 .models__name-cell {
   display: inline-flex;
@@ -708,6 +732,208 @@ async function doRemove() {
   }
   .models__count {
     margin-left: 0;
+  }
+}
+
+.models__tabs {
+  gap: 3px;
+  margin-top: 2px;
+  overflow-x: auto;
+  border-bottom-color: var(--ui-border);
+}
+
+.models__tab {
+  min-height: 40px;
+  padding: 0 12px;
+  color: var(--ui-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.models__tab.is-active {
+  color: var(--ui-primary);
+  border-bottom-color: var(--ui-primary);
+}
+
+.models__tab-count {
+  min-width: 17px;
+  padding: 1px 5px;
+  color: var(--ui-muted);
+  background: var(--ui-surface-soft);
+  border-radius: 999px;
+  text-align: center;
+  font-size: 8px;
+}
+
+.models__filters {
+  justify-content: space-between;
+}
+
+.models__search {
+  flex: 0 1 320px;
+}
+
+.models__count {
+  color: var(--ui-muted);
+  font-size: 9px;
+}
+
+.models__list {
+  overflow: hidden;
+  padding: 0;
+}
+
+.models__list-heading {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.models__list-heading h2 {
+  color: var(--ui-ink);
+  font-size: 11px;
+}
+
+.models__list-heading p,
+.models__list-heading > span {
+  margin-top: 3px;
+  color: var(--ui-muted);
+  font-size: 8px;
+}
+
+.models__list-state {
+  min-height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ui-muted);
+  font-size: 10px;
+}
+
+.models__rows {
+  display: grid;
+}
+
+.models__row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.models__row:last-child {
+  border-bottom: 0;
+}
+
+.models__row-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  color: var(--ui-primary);
+  background: var(--ui-primary-soft);
+  border-radius: 10px;
+}
+
+.models__row-main {
+  min-width: 0;
+}
+
+.models__row-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.models__row-title > strong {
+  color: var(--ui-ink);
+  font-size: 10px;
+}
+
+.models__row-model {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  margin-top: 4px;
+  color: var(--ui-muted);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models__row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 7px;
+  color: var(--ui-muted);
+  font-size: 8px;
+}
+
+.models__row-meta span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.models__row-meta small {
+  color: var(--ui-muted);
+}
+
+.models__row-meta code {
+  overflow: hidden;
+  max-width: 280px;
+  color: var(--ui-text);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models__default {
+  padding: 3px 6px;
+  color: var(--ui-primary);
+  background: var(--ui-primary-soft);
+  font-size: 8px;
+}
+
+.models__tag {
+  padding: 3px 6px;
+  color: var(--ui-success);
+  background: var(--ui-surface-soft);
+  font-size: 8px;
+}
+
+.models__row-warning {
+  margin-top: 5px;
+  color: var(--ui-warning);
+  font-size: 8px;
+}
+
+.models__row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+@media (max-width: 860px) {
+  .models__row {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .models__row-actions {
+    grid-column: 2;
+    justify-content: flex-start;
   }
 }
 </style>

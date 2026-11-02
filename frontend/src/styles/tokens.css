@@ -21,7 +21,7 @@
 :root {
   --brand-primary: #1E40AF;
   --brand-primary-hover: #1E3A8A;
-  --brand-primary-soft: #DBEAFE;
+  --brand-primary-soft: #EAF2FF;
   --brand-primary-on-soft: #1E3A8A;
   --brand-accent: #F59E0B;
   --brand-accent-hover: #D97706;
@@ -87,7 +87,7 @@
 /* --------------------------------------------------------------------------
    L2 Brand —— 深色覆盖
    深色下品牌色必须提亮（深底对比度不足）。
-   .scheme-dark 提供 blue 的深色值 + 中性/状态色深色值；
+   .scheme-dark 提供 blue 的深色值；
    其余品牌用双类 .scheme-dark.brand-* 覆盖（特异性 0,2,0 > 0,1,0）。
    -------------------------------------------------------------------------- */
 .scheme-dark {
@@ -101,37 +101,6 @@
   --brand-accent-soft: #78350F;
   --brand-accent-on: #451A03;
 
-  /* 中性色 */
-  --color-bg-page: #0F172A;
-  --color-bg-surface: #1E293B;
-  --color-bg-subtle: #334155;
-  --color-border: #334155;
-  --color-border-strong: #475569;
-  --color-text-primary: #F1F5F9;
-  --color-text-secondary: #CBD5E1;
-  --color-text-muted: #94A3B8;
-
-  /* 语义色（深色下提亮） */
-  --color-success: #4ADE80;
-  --color-warning: #FBBF24;
-  --color-danger: #F87171;
-  --color-info: #60A5FA;
-
-  /* 作业状态色（深色下提亮，三态仍相互可区分） */
-  --status-queued: #94A3B8;
-  --status-running: #60A5FA;
-  --status-plan-ready: #A78BFA;
-  --status-success: #4ADE80;
-  --status-partial: #FBBF24;
-  --status-failed: #F87171;
-  --status-cancelled: #64748B;
-  --status-aborted: #CBD5E1;
-
-  /* 深色下阴影可见度低，改用更重的黑，层级更多依赖边框 */
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, .30);
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, .40), 0 1px 2px rgba(0, 0, 0, .25);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, .45);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, .55);
 }
 
 .scheme-dark.brand-indigo {
@@ -193,29 +162,36 @@
   --color-accent-soft: var(--brand-accent-soft);
   --color-accent-on: var(--brand-accent-on);
 
-  /* 中性色（不随主题变化） */
-  --color-bg-page: #F8FAFC;
+  /* 中性色 */
+  --color-bg-page: #F3F7FC;
   --color-bg-surface: #FFFFFF;
-  --color-bg-subtle: #F1F5F9;
-  --color-border: #E2E8F0;
+  --color-bg-subtle: #F5F9FE;
+  --color-border: #E2EAF3;
   --color-border-strong: #CBD5E1;
-  --color-text-primary: #1E293B;
-  --color-text-secondary: #475569;
-  --color-text-muted: #64748B;
+  --color-text-primary: #142B4A;
+  --color-text-secondary: #334B68;
+  --color-text-muted: #71849B;
 
-  /* 语义色（不随主题变化） */
-  --color-success: #16A34A;
-  --color-warning: #D97706;
-  --color-danger: #DC2626;
-  --color-info: #2563EB;
+  /* 语义色与状态浅底 */
+  --color-success: #147560;
+  --color-success-soft: #E8F5F1;
+  --color-success-contrast: #FFFFFF;
+  --color-warning: #96600F;
+  --color-warning-soft: #FFF5E5;
+  --color-warning-contrast: #142B4A;
+  --color-danger: #B54747;
+  --color-danger-soft: #FCEAEA;
+  --color-info: #2563A6;
+  --color-info-soft: #EAF2FF;
+  --color-info-contrast: #FFFFFF;
 
   /* 作业状态色（七态，对应 sync_runs.status；语义不同不得共用颜色） */
   --status-queued: #64748B;
-  --status-running: #2563EB;
+  --status-running: #2563A6;
   --status-plan-ready: #7C3AED;
-  --status-success: #16A34A;
-  --status-partial: #D97706;
-  --status-failed: #DC2626;
+  --status-success: #147560;
+  --status-partial: #96600F;
+  --status-failed: #B54747;
   --status-cancelled: #94A3B8;
   --status-aborted: #475569;
 
@@ -284,12 +260,11 @@
 /* --------------------------------------------------------------------------
    随明暗变化的语义令牌
    必须放在 L3 :root **之后**：`:root` 与 `.scheme-*` 特异性同为 0,1,0，
-   同名令牌由源顺序决胜；若写在前面的品牌块里，会被 L3 的浅色默认值反覆盖，
-   结果是深色模式下「主色底上的文字」仍是白色（浅蓝底白字不达 WCAG AA）。
+   同名令牌由源顺序决胜。
    -------------------------------------------------------------------------- */
 :root,
 .scheme-light {
-  /* 主色底上的文字：浅色主题主色为深色 → 配白字 */
+  /* 浅色主题主色为深色，彩色底块使用白色前景 */
   --color-primary-contrast: #FFFFFF;
   --color-danger-contrast: #FFFFFF;
   /* 遮罩（抽屉 / 弹层背板）。不用毛玻璃：小程序不支持 backdrop-filter（§6.1） */
@@ -297,9 +272,48 @@
 }
 
 .scheme-dark {
-  /* 深色下主色 / 危险色已提亮 → 底上文字改用深色 */
+  /* 深色主题提亮后的彩色底块使用深色前景 */
   --color-primary-contrast: #0F172A;
   --color-danger-contrast: #0F172A;
+  --color-success-contrast: #0F172A;
+  --color-warning-contrast: #0F172A;
+  --color-info-contrast: #0F172A;
+
+  /* 中性色 */
+  --color-bg-page: #0F172A;
+  --color-bg-surface: #1E293B;
+  --color-bg-subtle: #334155;
+  --color-border: #334155;
+  --color-border-strong: #475569;
+  --color-text-primary: #F1F5F9;
+  --color-text-secondary: #CBD5E1;
+  --color-text-muted: #94A3B8;
+
+  /* 语义色与状态浅底 */
+  --color-success: #4ADE80;
+  --color-success-soft: #173B36;
+  --color-warning: #FBBF24;
+  --color-warning-soft: #3D2D13;
+  --color-danger: #F87171;
+  --color-danger-soft: #3F2024;
+  --color-info: #60A5FA;
+  --color-info-soft: #1B3552;
+
+  /* 作业状态色（深色下提亮） */
+  --status-queued: #94A3B8;
+  --status-running: #60A5FA;
+  --status-plan-ready: #A78BFA;
+  --status-success: #4ADE80;
+  --status-partial: #FBBF24;
+  --status-failed: #F87171;
+  --status-cancelled: #64748B;
+  --status-aborted: #CBD5E1;
+
+  /* 深色下层级更多依赖边框 */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, .30);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, .40), 0 1px 2px rgba(0, 0, 0, .25);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, .45);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, .55);
   --color-overlay: rgba(0, 0, 0, .55);
 }
 

@@ -1,13 +1,13 @@
 """API·models — 多模型配置管理（多个 LLM / 多个 Embedding，使用时可选，见 §18）。
 
 能力：
-- 列出当前用户的模型配置（可按 kind=llm|embed|asr 过滤）
+- 列出当前用户的模型配置（可按 kind 过滤）
 - 新增 / 修改 / 删除模型配置；删除被引用的 embedding 配置需先换模型重建索引
 - 设置某 kind 的默认项（一个 kind 只有一个默认）
 - 连通性测试：不落库直接试连（支持对未保存的配置试连）
 
 主要端点：
-- GET    /api/v1/models?kind=llm|embed|asr
+- GET    /api/v1/models?kind=llm|embed|asr|rerank
 - POST   /api/v1/models                  # { kind, name, model, provider?, base_url?, api_key?, params?, set_default? }
 - POST   /api/v1/models/test             # 试连未保存的配置（body 同 create，不含 set_default）
 - GET    /api/v1/models/{id}
@@ -46,19 +46,27 @@ from app.services.model_service import to_out, to_runtime
 
 router = APIRouter(prefix="/api/v1/models", tags=["models"])
 
-# kind 白名单：llm（对话）/ embed（向量化）/ asr（语音识别）。
-# 三者在同一个 model_profiles 表里靠 kind 区分，各自有独立的默认项；
-# 加 asr 不需要迁移（DB 列是普通字符串），但要同步 test_connection 的分支。
-_KINDS = ("llm", "embed", "asr")
+# kind 白名单：llm（对话）/ embed（向量化）/ asr（语音识别）/ rerank（相关性重排）。
+# 各类型共用 model_profiles 表并维护各自默认项，无需数据库迁移。
+_KINDS = ("llm", "embed", "asr", "rerank")
+_RERANK_PROTOCOLS = ("siliconflow", "cohere")
 
 
 def _require_kind(kind: str) -> str:
-    """kind 只允许 llm / embed / asr。"""
+    """Validate a model profile kind."""
     if kind not in _KINDS:
         raise HTTPException(
             status_code=422, detail=f"kind 必须是 {' | '.join(_KINDS)} 之一，收到 {kind!r}"
         )
     return kind
+
+
+def _validate_rerank_protocol(kind: str, params: dict | None) -> None:
+    if kind == "rerank" and (params or {}).get("protocol") not in _RERANK_PROTOCOLS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"rerank params.protocol 必须是 {' | '.join(_RERANK_PROTOCOLS)} 之一",
+        )
 
 
 async def _get_or_404(session: AsyncSession, model_id: int, user_id: str) -> ModelProfile:
@@ -90,11 +98,11 @@ def _runtime_from_payload(payload: ModelProfileCreate, user_id: str) -> ModelRun
 
 @router.get("", response_model=list[ModelProfileOut])
 async def list_models(
-    kind: str | None = Query(default=None, pattern="^(llm|embed|asr)$"),
+    kind: str | None = Query(default=None, pattern="^(llm|embed|asr|rerank)$"),
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
 ):
-    """列出当前用户的模型配置（可按 kind=llm|embed|asr 过滤）。"""
+    """列出当前用户的模型配置（可按 kind 过滤）。"""
     return await model_service.list_models(session, user_id, kind)
 
 
@@ -106,6 +114,7 @@ async def create_model(
 ):
     """新增模型配置（同名同 kind 已存在 → 409；set_default=true 时同时设为默认）。"""
     _require_kind(payload.kind)
+    _validate_rerank_protocol(payload.kind, payload.params)
 
     existing = await model_repo.find_by_name(session, user_id, payload.kind, payload.name)
     if existing is not None:
@@ -123,6 +132,7 @@ async def test_unsaved_model(
 ):
     """试连**未保存**的配置：不落库，直接按入参发起一次真实调用。"""
     _require_kind(payload.kind)
+    _validate_rerank_protocol(payload.kind, payload.params)
     runtime = _runtime_from_payload(payload, user_id)
     return await model_service.test_connection(runtime)
 
@@ -151,6 +161,8 @@ async def update_model(
     需要各自 reindex，否则新旧向量混在同一 collection。由前端提示用户决定。
     """
     profile = await _get_or_404(session, model_id, user_id)
+    if payload.params is not None:
+        _validate_rerank_protocol(profile.kind, payload.params)
 
     # 改名需保持 (user_id, kind, name) 唯一
     if payload.name is not None and payload.name != profile.name:

@@ -225,6 +225,9 @@ class SearchRequest(BaseModel):
 class ChunkHit(BaseModel):
     """检索命中的片段。
 
+    score 始终表示向量相似度；bm25_score 是可选的 BM25 分数，
+    fusion_score 是 RRF 排名分，rerank_score 是可选精排分数。
+    BM25 独有命中时 vector_recalled=False，score 仅为兼容旧客户端保留的 0 占位值。
     images 来自 chunk.metadata["images"]（ingest 阶段写入），描述**本片段内含**的图片：
     uid（关联 image_cache 行的溯源依据）/ ref（图片地址：URL 或相对 vault 根的路径）/
     kind（local|remote）/ raw（原始图片语法，供回填）/ alt / offset（片段内偏移）/ model。
@@ -236,6 +239,12 @@ class ChunkHit(BaseModel):
     title: str
     content: str
     score: float
+    bm25_score: float | None = None
+    vector_recalled: bool = True
+    rerank_score: float | None = None
+    vault_id: int | None = None
+    vault_name: str | None = None
+    fusion_score: float | None = None
     images: list[dict] = []
 
 
@@ -301,7 +310,7 @@ class ModelRuntime(BaseModel):
     已带上默认参数，rag 层不再关心 DB、用户默认等概念。
     """
 
-    kind: str                      # llm | embed | asr
+    kind: str                      # llm | embed | asr | rerank
     name: str                      # profile 名，便于日志与追踪
     base_url: str
     api_key: SecretStr
@@ -310,8 +319,8 @@ class ModelRuntime(BaseModel):
 
 
 class ModelProfileCreate(BaseModel):
-    """新建一个模型配置（LLM / Embedding / ASR）。"""
-    kind: str                                   # llm | embed | asr
+    """新建一个模型配置（LLM / Embedding / ASR / reranker）。"""
+    kind: str                                   # llm | embed | asr | rerank
     name: str                                   # 用户内唯一，如 'qwen-max' / 'bge-m3-local'
     model: str                                  # 模型标识，如 gpt-4o-mini / text-embedding-3-small
     provider: str = "openai"                    # OpenAI 兼容协议（Qwen / vLLM / 本地服务同）
@@ -405,6 +414,30 @@ class VaultOut(BaseModel):
     # 作业回写状态（见 M06 ADR-9）：只在作业成功后更新，失败/取消保持原值
     embed_profile_id: int | None = None
     embed_indexed_profiles: List[int] = []
+    indexed_file_count: int = 0
+    chunk_count: int = 0
+
+
+class VaultFileOut(BaseModel):
+    """Vault 当前符合摄取过滤条件的单个文件。"""
+
+    path: str
+    name: str
+    size_bytes: int
+    modified_at: int
+    indexed_at: int | None = None
+    status: Literal["indexed", "indexing", "pending", "error"]
+
+
+class VaultFilesOut(BaseModel):
+    """Vault 文件清单的分页响应。"""
+
+    files: List[VaultFileOut] = []
+    total: int = 0
+    page: int
+    page_size: int
+    counts: dict[str, int] = {}
+    scan_complete: bool = True
 
 
 # ===== 多用户鉴权（ENABLE_MULTIUSER=true，见 docs/design.md §17.3）=====

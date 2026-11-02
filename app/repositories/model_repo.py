@@ -1,7 +1,7 @@
 """数据访问·模型配置 — model_profiles 表的 CRUD（多模型管理，见 design.md §10 模块索引 M08）。
 
 能力：
-- 一个用户可配置多个 LLM（kind='llm'）与多个 Embedding（kind='embed'），使用时按 name / id 选择
+- 一个用户可配置多个 kind 的模型，使用时按 name / id 选择
 - 每个 kind 下有且仅有一个默认项（is_default），由 set_default 保证唯一
 - 供 model_service 做「请求参数 → 用户默认 → 系统种子」三级解析
 

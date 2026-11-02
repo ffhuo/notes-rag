@@ -12,8 +12,8 @@
 //  3) 来源：检索命中在流结束后折叠展示，可逐条展开片段预览 —— 只给标题和路径，
 //     用户没法判断引用是否真的支撑了这句话
 //
-// 顶部只有「当前对话 / 历史记录」两态（history 视图占主区），配置选择收进输入区左侧的
-// 图标按钮里：选择器是低频操作，常驻顶部等于每屏都在替用户占位置。
+// 顶部只有「当前对话 / 历史记录」两态（history 视图占主区），知识库范围以紧凑控件
+// 常驻输入区上方；模型与检索条数则与范围选择一起收进展开配置。
 //
 // 语音（可选增强，浏览器不支持就不出现对应按钮）：
 //  · 录入 = 录一段 → 后端 ASR 转写（recorder.js + audioApi）→ 文本填进输入框，**不自动发送**：
@@ -108,6 +108,7 @@ const llmOptions = computed(() =>
   llmModels.value.map((m) => ({ value: m.name, label: `${m.name}（${m.model}）` })),
 )
 const vaultOptions = computed(() => vaults.value.map((v) => ({ value: String(v.id), label: v.name })))
+const selectedVault = computed(() => vaults.value.find((v) => String(v.id) === vaultId.value) || null)
 
 onMounted(async () => {
   try {
@@ -244,9 +245,13 @@ function ask(params, answerId) {
         finish(answerId, {})
       },
       onError: (e) => {
+        const conflictDetail = typeof e.body?.detail === 'string' ? e.body.detail : ''
         const reason =
           e.status === 409
-            ? '该 vault 还没有可检索的索引，请先到知识库页同步或重建索引。'
+            ? conflictDetail ||
+              (selectedVault.value
+                ? '该 vault 还没有可检索的索引，请先到知识库页同步或重建索引。'
+                : '当前账号下没有已索引的知识库，请先同步或重建索引。')
             : e.status === 404
               ? '所选 vault 不存在或不属于当前账号。'
               : e.message
@@ -553,14 +558,15 @@ async function openConversation(id) {
 
     <!-- ===== 对话 ===== -->
     <template v-else>
-      <div class="chat__stream-wrap">
-        <div ref="scrollRef" class="chat__stream" @scroll="onStreamScroll">
-          <AppEmptyState
-            v-if="!messages.length"
-            icon="chat"
-            title="开始提问"
-            description="回答会先在你的 vault 里检索相关资料，再据此生成；来源在回答下方可展开查看。"
-          />
+      <div class="chat__workspace">
+        <div class="chat__conversation">
+          <div class="chat__stream-wrap">
+            <div ref="scrollRef" class="chat__stream" @scroll="onStreamScroll">
+              <div v-if="!messages.length" class="chat__welcome">
+                <span class="chat__welcome-mark"><AppIcon name="chat" :size="23" /></span>
+                <h2>从你的笔记开始探索</h2>
+                <p>提出问题，AI 会检索相关内容，并附上可核对的来源。</p>
+              </div>
 
           <div
             v-for="m in messages"
@@ -629,18 +635,25 @@ async function openConversation(id) {
 
               <!-- 来源：流结束后折叠展示，展开后可逐条看片段预览 -->
               <div v-if="m.role === 'assistant' && m.sources.length" class="chat__sources">
-                <AppButton
-                  variant="ghost"
-                  size="sm"
-                  :icon="sourcesOpen[m.id] ? 'chevron-down' : 'chevron-right'"
+                <button
+                  type="button"
+                  class="chat__sources-heading"
+                  :aria-expanded="!!sourcesOpen[m.id]"
                   @click="toggleSources(m.id)"
                 >
-                  来源（{{ m.sources.length }}）
-                </AppButton>
+                  <span class="chat__sources-heading-title">
+                    <AppIcon name="file-text" :size="15" />
+                    引用来源
+                  </span>
+                  <span class="chat__sources-heading-count">{{ m.sources.length }} 个片段</span>
+                  <AppIcon
+                    :name="sourcesOpen[m.id] ? 'chevron-down' : 'chevron-right'"
+                    :size="15"
+                  />
+                </button>
 
                 <ol v-if="sourcesOpen[m.id]" class="chat__source-list">
                   <li v-for="(s, si) in m.sources" :key="`${s.note_id}-${si}`" class="chat__source">
-                    <span class="chat__source-no">{{ si + 1 }}</span>
                     <div class="chat__source-body">
                       <button
                         type="button"
@@ -648,11 +661,30 @@ async function openConversation(id) {
                         :aria-expanded="isSourceOpen(m.id, si)"
                         @click="toggleSource(m.id, si)"
                       >
+                        <span class="chat__source-no">{{ String(si + 1).padStart(2, '0') }}</span>
                         <span class="chat__source-title" :title="s.title">{{ s.title || '（无标题）' }}</span>
-                        <span class="chat__score">{{ s.score.toFixed(3) }}</span>
+                        <span class="chat__score">
+                          {{ Number(s.vault_name != null ? s.fusion_score : s.rerank_score ?? s.fusion_score ?? s.score).toFixed(3) }}
+                          <small>
+                            {{ s.vault_name != null ? '跨库融合' : s.rerank_score != null ? '精排分' : s.fusion_score != null ? '混合融合' : '向量分' }}
+                          </small>
+                          <small v-if="s.bm25_score != null">关键词召回</small>
+                          <small v-if="s.vault_name != null && s.rerank_score != null">
+                            精排 {{ Number(s.rerank_score).toFixed(3) }}
+                          </small>
+                          <small
+                            v-if="s.vector_recalled !== false && (s.fusion_score != null || s.rerank_score != null)"
+                            class="chat__score-vector"
+                          >
+                            向量 {{ Number(s.score).toFixed(3) }}
+                          </small>
+                        </span>
                         <AppIcon :name="isSourceOpen(m.id, si) ? 'chevron-down' : 'chevron-right'" :size="16" />
                       </button>
-                      <div class="chat__source-path" :title="s.file_path">{{ s.file_path }}</div>
+                      <div class="chat__source-path" :title="s.file_path">
+                        <span v-if="s.vault_name" class="chat__source-vault">{{ s.vault_name }}</span>
+                        <span class="chat__source-file">{{ s.file_path }}</span>
+                      </div>
                       <div
                         v-if="isSourceOpen(m.id, si)"
                         class="chat__source-excerpt"
@@ -680,30 +712,45 @@ async function openConversation(id) {
         >
           回到底部
         </AppButton>
-      </div>
+          </div>
+        </div>
 
-      <!-- 输入区贴底：Enter 发送 / Shift+Enter 换行；生成中「发送」转「停止」 -->
-      <div class="chat__composer-wrap">
+          <!-- 输入区贴底：Enter 发送 / Shift+Enter 换行；生成中「发送」转「停止」 -->
+          <div class="chat__composer-wrap">
         <!--
           整块一张卡（composer）：文本框、工具图标、发送按钮同处一个圆角容器，
           而不是「输入框 + 按钮」两个并列方块 —— 后者看起来像表单而不是对话输入。
         -->
         <div class="chat__box">
-          <!-- 配置条：默认收起，点左下角图标展开；不做浮层，省掉「点外部关闭」那套状态 -->
+          <button
+            class="chat__scope"
+            type="button"
+            :class="{ 'is-open': toolbarOpen }"
+            :aria-expanded="toolbarOpen"
+            aria-label="设置知识库范围、模型和检索条数"
+            @click="toolbarOpen = !toolbarOpen"
+          >
+            <AppIcon name="vaults" :size="15" />
+            <span class="chat__scope-label">知识库</span>
+            <strong>{{ selectedVault?.name || '全部知识库' }}</strong>
+            <AppIcon :name="toolbarOpen ? 'chevron-up' : 'chevron-down'" :size="14" />
+          </button>
+
+          <!-- 低频设置收在输入区内，默认展开的范围控件仍清楚显示当前知识库。 -->
           <div v-if="toolbarOpen" class="chat__config">
+            <AppSelect
+              v-model="vaultId"
+              class="chat__select"
+              empty-label="不限定 vault"
+              :options="vaultOptions"
+              aria-label="选择知识库"
+            />
             <AppSelect
               v-model="llmProfile"
               class="chat__select"
               empty-label="默认 LLM"
               :options="llmOptions"
               aria-label="选择 LLM"
-            />
-            <AppSelect
-              v-model="vaultId"
-              class="chat__select"
-              empty-label="不限定 vault"
-              :options="vaultOptions"
-              aria-label="选择 vault"
             />
             <AppSelect
               v-model="topK"
@@ -727,11 +774,11 @@ async function openConversation(id) {
             <div class="chat__tools">
               <button
                 type="button"
-                class="chat__tool"
+                class="chat__tool chat__settings"
                 :class="{ 'is-on': toolbarOpen }"
                 :aria-expanded="toolbarOpen"
-                title="模型与检索范围"
-                aria-label="模型与检索范围"
+                title="模型与检索设置"
+                aria-label="模型与检索设置"
                 @click="toolbarOpen = !toolbarOpen"
               >
                 <AppIcon name="models" :size="16" />
@@ -786,6 +833,7 @@ async function openConversation(id) {
           </div>
         </div>
       </div>
+      </div>
     </template>
   </section>
 </template>
@@ -797,8 +845,27 @@ async function openConversation(id) {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  min-height: calc(100vh - var(--topbar-height) - var(--space-12));
+  height: 100%;
+  min-height: 0;
   min-width: 0;
+}
+
+.chat__workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.chat__conversation {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  width: min(100%, 900px);
+  margin: 0 auto;
+  min-width: 0;
+  min-height: 0;
 }
 
 /* ---------- 顶部：主区切换 ---------- */
@@ -940,7 +1007,44 @@ async function openConversation(id) {
   min-height: 0;
   min-width: 0;
   overflow-y: auto;
-  padding: var(--space-1);
+  padding: var(--space-4) var(--space-3);
+}
+
+.chat__welcome {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  flex: 1;
+  min-height: 100%;
+  padding: 30px 16px;
+  text-align: center;
+}
+
+.chat__welcome-mark {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 17px;
+}
+
+.chat__welcome h2 {
+  margin-top: 17px;
+  color: var(--color-text-primary);
+  font-size: 20px;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.02em;
+}
+
+.chat__welcome p {
+  max-width: 390px;
+  margin-top: 7px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
 }
 
 .chat__jump {
@@ -967,7 +1071,7 @@ async function openConversation(id) {
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
-  padding: var(--space-4);
+  padding: var(--space-3) var(--space-4);
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--radius-xl);
   background: var(--color-bg-surface);
@@ -977,11 +1081,19 @@ async function openConversation(id) {
 }
 .chat__bubble.is-user {
   max-width: 76%;
+  border-color: transparent;
+  border-radius: 18px 18px 5px 18px;
+  background: var(--color-bg-subtle);
+  box-shadow: none;
 }
 /* 回答是主内容，靠阴影而不是主色边框来「浮起来」—— 多轮对话下端到端的彩色边框太吵 */
 .chat__bubble.is-assistant {
   flex: 1 1 auto;
-  box-shadow: var(--shadow-sm);
+  padding-right: 0;
+  padding-left: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
 }
 
 .chat__who {
@@ -1111,9 +1223,48 @@ async function openConversation(id) {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  align-items: flex-start;
   border-top: var(--border-width) solid var(--color-border);
   padding-top: var(--space-3);
+}
+
+.chat__sources-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat__sources-heading:focus-visible,
+.chat__source-toggle:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.chat__sources-heading-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.chat__sources-heading-title > :deep(svg) {
+  color: var(--color-primary);
+}
+
+.chat__sources-heading-count {
+  flex: 1 1 auto;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
 }
 
 .chat__source-list {
@@ -1128,20 +1279,17 @@ async function openConversation(id) {
 
 /* 一条来源：序号 + 正文（标题/路径/片段预览），序号让「引用了哪几条」可数 */
 .chat__source {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
+  display: block;
   min-width: 0;
-  padding: var(--space-3);
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-surface);
-  box-shadow: var(--shadow-xs);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--color-primary);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  background: var(--color-primary-soft);
 }
 
 .chat__source-no {
   flex: none;
-  color: var(--color-text-muted);
+  color: var(--color-primary-on-soft);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-code);
   line-height: var(--line-height-code);
@@ -1149,9 +1297,8 @@ async function openConversation(id) {
 
 .chat__source-body {
   display: flex;
-  flex: 1 1 auto;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
   min-width: 0;
 }
 
@@ -1163,7 +1310,7 @@ async function openConversation(id) {
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--color-text-muted);
+  color: var(--color-primary-on-soft);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -1182,29 +1329,54 @@ async function openConversation(id) {
 }
 
 .chat__score {
+  display: grid;
+  justify-items: end;
   flex: none;
-  color: var(--color-primary);
+  color: var(--color-primary-on-soft);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-code);
   line-height: var(--line-height-code);
   font-variant-numeric: tabular-nums;
 }
 
+.chat__score small {
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-caption);
+}
+
+.chat__score .chat__score-vector {
+  margin-top: 2px;
+}
+
 .chat__source-path {
+  display: flex;
+  gap: var(--space-1);
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-muted);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-caption);
   line-height: var(--line-height-caption);
+  padding-left: 22px;
+}
+
+.chat__source-vault {
+  flex: none;
+  color: var(--color-primary-on-soft);
+}
+
+.chat__source-file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 片段预览：展开才显示（默认只给标题与路径），按文件格式渲染
    —— markdown 笔记直接显示原文的话，`##`、`**` 会糊在卡片上 */
 .chat__source-excerpt {
   margin-top: var(--space-1);
+  margin-left: 22px;
   padding-top: var(--space-2);
   border-top: var(--border-width) solid var(--color-border);
   color: var(--color-text-secondary);
@@ -1221,6 +1393,8 @@ async function openConversation(id) {
    焦点落在容器上（focus-within）而不是各自为战 —— 视觉上「一整块 vs 一堆方块」是这里的关键 */
 .chat__composer-wrap {
   flex: none;
+  width: min(100%, 900px);
+  margin: 0 auto;
   padding-top: var(--space-2);
 }
 
@@ -1228,9 +1402,9 @@ async function openConversation(id) {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border: var(--border-width) solid var(--color-border-strong);
-  border-radius: var(--radius-xl);
+  border-radius: 22px;
   background: var(--color-bg-surface);
   box-shadow: var(--shadow-sm);
   transition: border-color var(--duration-fast) var(--ease-standard),
@@ -1252,12 +1426,56 @@ async function openConversation(id) {
   outline: none;
 }
 
+.chat__scope {
+  width: fit-content;
+  max-width: 100%;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard),
+              border-color var(--duration-fast) var(--ease-standard),
+              color var(--duration-fast) var(--ease-standard);
+}
+
+.chat__scope:hover,
+.chat__scope.is-open {
+  border-color: var(--color-border);
+  background: var(--color-bg-surface);
+  color: var(--color-primary);
+}
+
+.chat__scope > :deep(svg:first-child) {
+  color: var(--color-primary);
+}
+
+.chat__scope-label {
+  color: var(--color-text-muted);
+}
+
+.chat__scope strong {
+  overflow: hidden;
+  max-width: 240px;
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat__config {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  padding-bottom: var(--space-2);
+  padding: 0 0 var(--space-3);
   border-bottom: var(--border-width) solid var(--color-border);
 }
 
@@ -1355,14 +1573,14 @@ async function openConversation(id) {
   padding: 0;
   border: var(--border-width) solid transparent;
   border-radius: var(--radius-full);
-  background: var(--color-accent);
-  color: var(--color-accent-on);
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
   cursor: pointer;
   transition: background-color var(--duration-fast) var(--ease-standard),
               color var(--duration-fast) var(--ease-standard);
 }
 .chat__send:hover:not(:disabled) {
-  background: var(--color-accent-hover);
+  background: var(--color-primary-hover);
 }
 .chat__send:disabled {
   background: var(--color-bg-subtle);
@@ -1384,7 +1602,16 @@ async function openConversation(id) {
 
 @media (max-width: 767px) {
   .chat {
-    min-height: calc(100vh - var(--topbar-height) - var(--space-8));
+    min-height: 0;
+  }
+  .chat__workspace {
+    gap: 0;
+  }
+  .chat__stream {
+    padding: var(--space-3) var(--space-1);
+  }
+  .chat__box {
+    padding: var(--space-2) var(--space-3);
   }
   /* 触控目标 ≥44px：圆形按钮在窄屏要撑开，否则手指点不准 */
   .chat__tool,
@@ -1401,7 +1628,10 @@ async function openConversation(id) {
     width: auto;
   }
   .chat__bubble.is-user {
-    max-width: 88%;
+    max-width: 90%;
+  }
+  .chat__scope strong {
+    max-width: min(52vw, 220px);
   }
 }
 </style>

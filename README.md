@@ -64,7 +64,7 @@ notes-rag/
 > 本机需先安装 uv（任选其一）：
 > - `python -m pip install uv`
 > - 或官方脚本：`curl -LsSf https://astral.sh/uv/install.sh | sh`
-> 本机 Python 命令约定：统一用 `python`（3.12）。
+> 本项目支持 Python 3.12–3.13；本机命令约定：统一用 `python`（3.12）。
 
 **依赖默认从官方 PyPI 安装**；国内网络可指定镜像加速：
 `make sync UV_INDEX=https://mirrors.aliyun.com/pypi/simple/`（`Makefile` 会把它注入 `UV_DEFAULT_INDEX`，优先级高于配置文件；个人偏好也可放未入库的 `uv.toml`）。
@@ -113,7 +113,7 @@ uv run uvicorn app.main:app --reload
 ```bash
 # 构建并启动（数据持久化到 ./data、日志到 ./logs，监听 0.0.0.0）
 make docker-build
-make docker-up          # 等价于 docker compose -f deploy/docker-compose.yml up -d --build
+make docker-up          # 使用与 docker-build 相同的 pyproject 版本 tag 构建并启动
 make docker-down        # 停止
 
 # 或直接用 docker run
@@ -174,12 +174,15 @@ vault 完全由前端 / API 运行时配置，**不在 `.env` 中管理**：在�
 - **false（单用户）**：所有资源归 `user_id="default"`，接口用 `X-API-Key` 鉴权，前端无登录页（在设置填一次 API Key）。
 - **true（多用户）**：启用 `users` 表 + JWT（`JWT_SECRET` 必填），前端出现 Login 页；受保护接口同时接受 `X-API-Key` 与 `Bearer <JWT>`，vault / 对话按用户隔离（见 M06）。
 
-### 多模型（多个 LLM / 多个 Embedding，使用时可选）
+### 多模型（LLM / Embedding / ASR / Reranker）
 
-模型配置（LLM / Embedding / ASR）全部落 `model_profiles` 表，**`.env` 不再提供模型配置**（无兜底项）；前端「Models」页可增删改、设默认、试连。
+模型配置全部落 `model_profiles` 表，**`.env` 不再提供模型配置**（无兜底项）；前端「Models」页可增删改、设默认、试连。
 
 - **LLM**：无状态耦合，**每次请求都能换**（`ChatRequest.llm_profile`，前端问答页下拉选择）。
 - **Embedding**：与索引强绑定 —— 向量按 `v{vault}_m{profile}` 分集合，检索必须沿用建索引时那个模型；换模型 = 对该 vault 重新索引（`POST /vaults/{id}/reindex?embed_profile=...`）。接口**故意不暴露** `SearchRequest.embed_profile`，避免「能召回但全是噪声」的静默错误。
+- **混合检索**：Search、Chat 和 MCP 搜索默认使用 SQLite FTS5 BM25 + 向量召回，并通过 RRF 融合排名；BM25 使用 jieba 分词以支持中文，并过滤常见中英文疑问词，减少仅因“是什么 / 怎么用”等词造成的无关命中。可在 `.env` 设置 `BM25_ENABLED=false` 关闭 BM25。
+- **召回/精排数量**：`.env` 中 `VECTOR_RECALL_*`、`BM25_RECALL_*` 和 `RERANK_CANDIDATE_*` 分别控制向量候选、BM25 候选及送入精排的候选上限。默认每路候选数为 `min(max(top_k × 4, 20), 100)`，RRF 常数 `RETRIEVAL_RRF_K=60`；最终仍只返回 `top_k` 条。旧索引会在首次启动时回填全文索引，之后随同步更新。
+- **Reranker**：可配置硅基流动或 Cohere 的 `kind=rerank` profile；设为该类型默认项后，对混合召回候选精排。调用失败会记录告警并回退到 RRF 排序。`score` 保持向量相似度，另有可选 `bm25_score`、`fusion_score` 和 `rerank_score`。
 
 详见 `docs/design.md` 模块索引 M08。
 
@@ -231,7 +234,7 @@ vault 完全由前端 / API 运行时配置，**不在 `.env` 中管理**：在�
 | `make frontend-check` | 前端门禁：构建 + 令牌对比度 + 样式合规（CI 用） |
 | `make frontend-tokens` | 导出主题令牌给小程序（rpx）/ RN（TS） |
 | `make docker-build` | 构建镜像（多阶段：含前端构建） |
-| `make docker-up` | 用 docker compose 启动 |
+| `make docker-up` | 用 docker compose 构建并启动，镜像 tag 与 `pyproject.toml` 版本一致 |
 | `make docker-down` | 停止 compose 服务 |
 
 > 查看全部命令：`make help`。

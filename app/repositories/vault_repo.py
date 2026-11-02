@@ -28,6 +28,7 @@ from sqlalchemy import select, delete as sa_delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Vault, User, Note, Chunk, SyncRun
+from app.repositories import bm25_repo
 
 
 async def create_vault(
@@ -172,6 +173,7 @@ async def delete_vault(session: AsyncSession, vault_id: int, user_id: str) -> No
 
     # 先删 chunks（外键关联 note_id）
     note_ids = select(Note.id).where(Note.vault_id == vault_id)
+    await bm25_repo.delete_for_vault(session, vault_id)
     await session.execute(
         sa_delete(Chunk).where(Chunk.note_id.in_(note_ids))
     )

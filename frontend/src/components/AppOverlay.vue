@@ -1,5 +1,5 @@
 <script setup>
-// 弹层外壳（T2.8）—— AppModal / AppDrawer 共用同一份「遮罩 + Esc + 焦点陷阱」实现。
+// 弹层外壳（T2.8）—— AppModal 使用同一份「遮罩 + Esc + 焦点陷阱」实现。
 //
 // 刻意不用 <Teleport>：小程序没有 DOM 传送能力（规范 §6.1），弹层直接渲染在原地 +
 // position: fixed，各端语义一致。
@@ -8,7 +8,6 @@ import AppIcon from './AppIcon.vue'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
-  variant: { type: String, default: 'modal' }, // modal | drawer
   title: { type: String, default: '' },
   width: { type: [Number, String], default: null },
   /** 进行中（如删除请求已发出）时禁止 Esc / 点遮罩关闭。 */
@@ -105,7 +104,7 @@ const panelStyle = computed(() => {
 </script>
 
 <template>
-  <div v-if="modelValue" class="app-overlay" :class="`is-${variant}`">
+  <div v-if="modelValue" class="app-overlay is-modal">
     <div class="app-overlay__mask" @click="onMask"></div>
 
     <div
@@ -180,23 +179,6 @@ const panelStyle = computed(() => {
   border-radius: var(--radius-xl);
 }
 
-/* Drawer：右侧滑出，位置偏移用 transform 过渡（规范 §2.7） */
-.is-drawer {
-  justify-content: flex-end;
-}
-.is-drawer .app-overlay__panel {
-  width: 480px;
-  max-width: 100%;
-  height: 100%;
-  border-radius: 0;
-  animation: app-drawer-in var(--duration-slow) var(--ease-standard);
-}
-
-@keyframes app-drawer-in {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
-}
-
 .app-overlay__header {
   display: flex;
   align-items: center;
@@ -265,9 +247,6 @@ const panelStyle = computed(() => {
     width: 100%;
     max-height: 92%;
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  }
-  .is-drawer .app-overlay__panel {
-    width: 100%;
   }
 }
 </style>

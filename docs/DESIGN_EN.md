@@ -28,7 +28,7 @@
 - Multi-source vault ingestion (local reference / zip upload / git / remote), with file and folder filtering
 - Multi-format parsing (`.md` / `.txt` / `.docx` / `.pdf` / `.xlsx`). Scanned PDFs are supported:
   text-less pages are rendered to images and recognized by a multimodal LLM — no OCR engine introduced
-- **Multiple LLMs / Embeddings, configurable and selectable** (LLM switchable per request; Embedding bound to the index — switching requires re-indexing)
+- **Multiple model profiles** for LLM, Embedding, ASR, and reranking (LLM switchable per request; Embedding bound to the index — switching requires re-indexing)
 - Frontend SPA (Vault management / search / chat / model management), same-origin hosting on a single port
 - Optional multi-user switch (single-user personal mode by default)
 - Agent integration (MCP server: stdio / Streamable HTTP)
@@ -214,17 +214,21 @@ Progress: GET /vaults/{id}/runs/{rid}   Cancel: POST /vaults/{id}/runs/{rid}/can
 POST /search
   → retrieval_service.retrieve(query, top_k, threshold, vault_id)
   → resolve the vault's effective embedding (vaults.embed_profile_id) → consistency guard
-  → embedder.embed([query]) → vectorstore.query(vector, top_k, threshold)
-  → assemble ChunkHit (note_id / file_path / title / content / score)
+  → parallel recall: vectorstore (semantic) + SQLite FTS5 (jieba-tokenized BM25)
+  → fuse candidate ranks with RRF → optional reranker → return Top-K
+  → assemble ChunkHit with separate score / bm25_score / fusion_score / rerank_score semantics
 ```
 
 **The API deliberately does not expose `embed_profile`** — retrieval must use the model that built the index (see M04 §5.3).
+Candidate pool sizes are configured via `.env` variables `VECTOR_RECALL_*`, `BM25_RECALL_*`, and `RERANK_CANDIDATE_*`. Each defaults to `min(max(top_k × 4, 20), 100)`; `top_k` still controls the final result count. The SQLite FTS index backfills existing chunks on first startup and tracks chunk replacement/deletion and note path/title changes.
+BM25 queries filter common Chinese and English question words from jieba's terms so an OR query does not retrieve unrelated chunks based only on generic words such as "what is" or "how to use"; vector recall is unaffected.
 
 ### 5.3 Chat (SSE streaming)
 
 ```
 POST /chat  { query, conversation_id?, top_k, vault_id?, llm_profile? }
-  → resolve LLM (three-level priority) → retrieval_service.retrieve(...)
+  → resolve LLM (three-level priority) → retrieve per vault; omitted vault_id searches all indexed vaults owned by the user
+  → fuse cross-vault results by RRF rank without comparing scores from different embedding spaces
   → assemble system (answer only from <context>, no fabrication) + context chunks + history
   → llm_client.stream_chat(messages, runtime) → yield token by token
   → SSE: data:{"type":"token","text":"..."} … {"type":"sources",...} {"type":"done"}
@@ -232,6 +236,7 @@ POST /chat  { query, conversation_id?, top_k, vault_id?, llm_profile? }
 ```
 
 The frontend reads the stream with `fetch` (`EventSource` cannot send auth headers).
+All-vault mode labels sources with their vault name and returns `409` when no indexed vault is available.
 
 ---
 
@@ -325,7 +330,7 @@ sync_runs(id PK, user_id, vault_id, trigger, mode, dry_run,
 
 > Field-level semantics, list-field parsing pitfalls, and derived methods see **M01 Core Framework & Config**; deployment shapes see **M10 Deployment**.
 
-**Model config is not in `.env`**: all three kinds (LLM / Embedding / ASR) live in the `model_profiles` table, configured via the frontend "Models" page
+**Model config is not in `.env`**: LLM / Embedding / ASR / reranker profiles live in the `model_profiles` table, configured via the frontend "Models" page
 or `POST /api/v1/models` (§10 module index M08). With an empty table, chat / indexing / transcription all return `409` pointing to the config page —
 **no `.env` fallback**, avoiding two sources of truth for the same thing.
 
@@ -333,7 +338,7 @@ or `POST /api/v1/models` (§10 module index M08). With an empty table, chat / in
 
 | Group | Fields |
 |---|---|
-| Runtime | `DEBUG`, `VERSION` |
+| Runtime | `DEBUG` (the version is not configured in `.env`: the single source of truth is `project.version` in `pyproject.toml`; use `APP_VERSION` to override when no source tree is available) |
 | Ingestion filters | `INGEST_EXTS` (default `md,txt,docx,pdf`), `INGEST_EXCLUDE_DIRS` (default excludes `node_modules` / `.git` / `.obsidian` / `.trash` / `__pycache__` / `.venv`) |
 | Change management | `INGEST_SYNC_INTERVAL` (scheduled sync seconds, 0=off), `INGEST_SYNC_ON_STARTUP`, `INGEST_SETTLE_SECONDS`, `INGEST_MAX_CONCURRENCY`, `PRUNE_ENABLED`, `PRUNE_RATIO_LIMIT` (default 0.5), `SYNC_RUNS_KEEP` (default 50), `PROGRESS_FLUSH_MS` (min progress-write interval, default 500; stage jumps and terminal states force writes), `WATCH_ENABLED`, `WATCH_DEBOUNCE_MS`, `MAX_FILE_SIZE` (see M03 §8 / M01 §5.2) |
 | Storage | `CHROMA_DIR`, `SQLITE_PATH` |

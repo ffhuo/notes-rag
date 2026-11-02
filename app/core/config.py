@@ -10,7 +10,8 @@
     - 字段：ingest_exts / ingest_exclude_dirs（摄取过滤：扩展名白名单 / 排除目录，详见 §16）
     - 字段：ingest_sync_interval / ingest_sync_on_startup / ingest_settle_seconds /
       ingest_max_concurrency / prune_enabled / prune_ratio_limit / sync_runs_keep /
-      progress_flush_ms / watch_enabled / watch_debounce_ms / max_file_size
+      progress_flush_ms / watch_enabled / watch_debounce_ms / max_file_size /
+      bm25_enabled / vector_recall_* / bm25_recall_* / rerank_candidate_* / retrieval_rrf_k
       （同步与作业：定时触发 / 删除护栏 / 记录裁剪 / 进度节流，见 M03 §8 与 §5.8–§5.13）
     - 字段：chroma_dir / sqlite_path（向量库与 SQLite 持久化路径）
     - 字段：api_key / cors_origins（鉴权与跨域）
@@ -28,8 +29,10 @@
 from typing import Annotated, Any, List
 
 import json
+import tomllib
+from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
@@ -37,11 +40,30 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 StrList = Annotated[List[str], NoDecode]
 
 
+def _resolve_version() -> str:
+    """项目版本号：以 pyproject.toml 为唯一真相源。
+
+    为什么不用 importlib.metadata：本项目 [tool.uv] package = false，不会被安装成包，
+    元数据里查不到自身版本。构建产物（wheel / 单文件）中若没有 pyproject.toml，
+    由 APP_VERSION 环境变量兜底（见 version 字段的 validation_alias）。
+
+    路径按 __file__ 推导，与启动时的工作目录无关。
+    """
+    root = Path(__file__).resolve().parents[2]   # app/core/config.py → 项目根
+    try:
+        with (root / "pyproject.toml").open("rb") as fp:
+            return str(tomllib.load(fp)["project"]["version"])
+    except (OSError, KeyError, tomllib.TOMLDecodeError):
+        return "0.0.0+unknown"
+
+
 class Settings(BaseSettings):
     # ===== 环境变量配置 =====
     DEBUG: bool = False
-    # 产品版本号：FastAPI / MCP 的 server version 与前端侧栏展示共用这一处
-    version: str = "1.0"
+    # 产品版本号：FastAPI / MCP 的 server version 与前端侧栏展示共用这一处。
+    # 真相源是 pyproject.toml；无源码产物（wheel / 单文件）用 APP_VERSION 覆盖。
+    # 显式指定 validation_alias，避免 .env 里残留的 VERSION 再次覆盖代码里的版本。
+    version: str = Field(default_factory=_resolve_version, validation_alias="APP_VERSION")
 
     # ===== 摄取过滤（多格式 / 文件夹过滤，见 docs/design.md §16）=====
     # Word(.docx) / PDF / Excel(.xlsx) 均为主依赖，默认启用（.xlsm 可按需显式加入）
@@ -81,6 +103,18 @@ class Settings(BaseSettings):
     # 文件系统监听（二期；仅 source_type=local 且非网络挂载时生效）
     watch_enabled: bool = False
     watch_debounce_ms: int = 1000      # 事件静默窗口：窗口内事件合并为一次作业提交
+    # 混合检索：每类召回及精排候选数均按 top_k 自动扩充并限制上下界
+    bm25_enabled: bool = True
+    vector_recall_multiplier: int = Field(default=4, ge=1)
+    vector_recall_min: int = Field(default=20, ge=1)
+    vector_recall_max: int = Field(default=100, ge=1)
+    bm25_recall_multiplier: int = Field(default=4, ge=1)
+    bm25_recall_min: int = Field(default=20, ge=1)
+    bm25_recall_max: int = Field(default=100, ge=1)
+    rerank_candidate_multiplier: int = Field(default=4, ge=1)
+    rerank_candidate_min: int = Field(default=20, ge=1)
+    rerank_candidate_max: int = Field(default=100, ge=1)
+    retrieval_rrf_k: int = Field(default=60, ge=1)
 
     # ===== 存储 =====
     chroma_dir: str = "./data/chroma"
@@ -109,6 +143,15 @@ class Settings(BaseSettings):
     log_error_file: str = "logs/error.log"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @model_validator(mode="after")
+    def validate_retrieval_candidate_ranges(self) -> "Settings":
+        for prefix in ("vector_recall", "bm25_recall", "rerank_candidate"):
+            minimum = getattr(self, f"{prefix}_min")
+            maximum = getattr(self, f"{prefix}_max")
+            if minimum > maximum:
+                raise ValueError(f"{prefix}_min must not exceed {prefix}_max")
+        return self
 
     # ===== 列表字段兼容解析 =====
     # pydantic-settings 对 List[str] 默认按 JSON 解析，写 INGEST_EXTS="a,b" 会直接

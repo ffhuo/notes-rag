@@ -98,6 +98,15 @@ const kpis = computed(() => {
   ]
 })
 
+const focusedRun = computed(
+  () => visibleRuns.value.find((run) => !isTerminal(run.status)) || visibleRuns.value[0] || null,
+)
+
+const focusedDetail = computed(() => {
+  const run = focusedRun.value
+  return run ? details.value[`${run.vault_id}:${run.id}`] || null : null
+})
+
 /* ---------- 表格 ---------- */
 
 const columns = [
@@ -289,16 +298,17 @@ watch(() => route.query.run_id, (v) => {
 
 <template>
   <section class="tasks">
-    <header class="tasks__intro">
-      <h2 class="tasks__title">任务与进度</h2>
-      <p class="tasks__desc">
-        索引是异步作业：提交后立即返回、在后台推进。这里可以看进度、看计划、随时取消。
-      </p>
+    <header class="page-intro">
+      <div>
+        <div class="eyebrow"><span class="eyebrow__dot"></span> INDEXING, STEP BY STEP</div>
+        <h1>每一次更新，都有迹可循</h1>
+        <p>跟踪知识库处理进度，知道当前阶段与下一步。</p>
+      </div>
     </header>
 
     <!-- KPI：数据看板的入口信息 -->
     <div class="tasks__kpis">
-      <AppCard v-for="k in kpis" :key="k.key" padding="sm" class="tasks__kpi">
+      <AppCard v-for="k in kpis" :key="k.key" padding="sm" class="tasks__kpi panel">
         <span class="tasks__kpi-head">
           <AppIcon :name="k.icon" :size="16" />
           <span class="tasks__kpi-label">{{ k.label }}</span>
@@ -306,6 +316,44 @@ watch(() => route.query.run_id, (v) => {
         <span class="tasks__kpi-value" :style="{ color: toneColor(k.tone) }">{{ k.value }}</span>
       </AppCard>
     </div>
+
+    <AppCard v-if="focusedRun" padding="md" class="tasks__focus panel">
+      <template #header>
+        <div class="tasks__focus-heading">
+          <span class="tasks__focus-icon"><AppIcon name="layers" :size="18" /></span>
+          <div>
+            <div class="tasks__focus-title">
+              <h2>{{ focusedRun.vault_name }}</h2>
+              <AppStatusBadge :status="focusedRun.status" size="sm" />
+            </div>
+            <p>作业 #{{ focusedRun.id }} <span>·</span> {{ stageLabel(focusedRun.stage) }}</p>
+          </div>
+        </div>
+        <AppButton
+          variant="secondary"
+          size="sm"
+          icon="chevron-down"
+          @click="onToggleExpand(rowKey(focusedRun))"
+        >
+          查看详情
+        </AppButton>
+      </template>
+      <div class="tasks__focus-progress">
+        <div class="tasks__focus-progress-heading">
+          <span>{{ isTerminal(focusedRun.status) ? countsSummary(focusedRun) : progressText(focusedRun) }}</span>
+          <strong>{{ percent(focusedRun) }}%</strong>
+        </div>
+        <AppProgress :run="focusedRun" compact hide-meta />
+        <p v-if="focusedDetail?.current_item" class="tasks__focus-current">
+          正在处理：<code>{{ focusedDetail.current_item }}</code>
+        </p>
+        <div v-else class="tasks__focus-stats">
+          <span><small>已处理</small><strong>{{ focusedDetail?.processed ?? focusedRun.processed ?? 0 }}</strong></span>
+          <span><small>待处理</small><strong>{{ focusedDetail?.total ?? focusedRun.total ?? '—' }}</strong></span>
+          <span><small>失败</small><strong>{{ focusedDetail?.failed_cnt ?? focusedRun.failed_cnt ?? 0 }}</strong></span>
+        </div>
+      </div>
+    </AppCard>
 
     <!-- 筛选栏：列表页必须内置筛选（规范 §1「筛选即骨架」） -->
     <div class="tasks__filters">
@@ -345,6 +393,7 @@ watch(() => route.query.run_id, (v) => {
     </p>
 
     <AppTable
+      class="panel"
       :columns="columns"
       :rows="visibleRuns"
       :loading="loading && !runs.length"
@@ -676,6 +725,155 @@ watch(() => route.query.run_id, (v) => {
   }
   .tasks__count {
     margin-left: 0;
+  }
+}
+
+.tasks__kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.tasks__kpi {
+  min-height: 90px;
+  flex: initial;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+.tasks__kpi :deep(.app-card__body) {
+  width: 100%;
+  gap: 5px;
+}
+
+.tasks__kpi-head {
+  color: var(--ui-muted);
+  font-size: 10px;
+}
+
+.tasks__kpi-value {
+  color: var(--ui-ink);
+  font-size: 21px;
+  line-height: 24px;
+}
+
+.tasks__focus {
+  padding: 0;
+}
+
+.tasks__focus :deep(.app-card__header) {
+  min-height: 76px;
+  padding: 15px 20px;
+  border-bottom-color: var(--ui-border);
+}
+
+.tasks__focus :deep(.app-card__body) {
+  padding: 18px 20px;
+}
+
+.tasks__focus-heading,
+.tasks__focus-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tasks__focus-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--ui-primary);
+  background: var(--ui-primary-soft);
+  border-radius: 11px;
+}
+
+.tasks__focus-title h2 {
+  color: var(--ui-ink);
+  font-size: 13px;
+}
+
+.tasks__focus-heading p {
+  margin-top: 5px;
+  color: var(--ui-muted);
+  font-size: 9px;
+}
+
+.tasks__focus-heading p span {
+  padding: 0 4px;
+}
+
+.tasks__focus-progress {
+  display: grid;
+  gap: 9px;
+}
+
+.tasks__focus-progress-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ui-muted);
+  font-size: 10px;
+}
+
+.tasks__focus-progress-heading strong {
+  color: var(--ui-primary);
+  font-size: 17px;
+}
+
+.tasks__focus-current {
+  margin: 0;
+  color: var(--ui-muted);
+  font-size: 9px;
+}
+
+.tasks__focus-current code {
+  color: var(--ui-ink);
+  overflow-wrap: anywhere;
+}
+
+.tasks__focus-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.tasks__focus-stats span {
+  display: grid;
+  gap: 3px;
+}
+
+.tasks__focus-stats small {
+  color: var(--ui-muted);
+  font-size: 9px;
+}
+
+.tasks__focus-stats strong {
+  color: var(--ui-ink);
+  font-size: 14px;
+}
+
+@media (max-width: 920px) {
+  .tasks__kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .tasks__kpi {
+    min-height: 78px;
+    padding: 11px;
+  }
+
+  .tasks__focus :deep(.app-card__header) {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>

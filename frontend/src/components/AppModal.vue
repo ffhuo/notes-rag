@@ -18,7 +18,6 @@ const emit = defineEmits(['update:modelValue', 'close'])
 <template>
   <AppOverlay
     :model-value="modelValue"
-    variant="modal"
     :title="title"
     :width="width"
     :persistent="persistent"

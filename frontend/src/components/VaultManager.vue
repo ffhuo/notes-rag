@@ -25,12 +25,12 @@
 // 提交后跳转 /tasks?run_id=…，让用户立刻看到进度，而不是盯着一个没有反馈的按钮。
 //
 // 作业数据来自公共件 useRunsPolling（与侧栏作业状态、Tasks 页共用一份请求）。
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { vaultsApi } from '../api'
 import { useRunsPolling } from '../composables/useRunsPolling'
+import { useVaultFiles } from '../composables/useVaultFiles'
 import { isTerminal, relativeTime } from '../jobs'
-import { setTopbarActions, clearTopbarActions } from '../shell'
 import { toast } from '../toast'
 import { PACK_LIMITS, formatBytes, summarize } from '../transport/zip'
 import { updateVaultFiles, uploadVault } from '../transport/upload'
@@ -45,10 +45,13 @@ import AppModal from './AppModal.vue'
 import AppProgress from './AppProgress.vue'
 import AppSelect from './AppSelect.vue'
 import AppStatusBadge from './AppStatusBadge.vue'
+import VaultCard from './VaultCard.vue'
 import VaultFilters from './VaultFilters.vue'
+import VaultFilesPanel from './VaultFilesPanel.vue'
 
 const router = useRouter()
 const { vaults, runs, loading, error, refresh } = useRunsPolling()
+const selectedVaultId = ref(null)
 
 /**
  * 默认排除项（Obsidian / 通用笔记库都不该入库的东西）。
@@ -156,6 +159,12 @@ function filterSummary(v) {
   return parts.length ? parts.join(' · ') : ''
 }
 
+function embedSummary(v) {
+  const profiles = v?.embed_indexed_profiles || []
+  const history = profiles.length ? ` · 已建过 [${profiles.join(', ')}]` : ''
+  return `Embedding：${v?.embed_profile_id ?? '未设置'}${history}`
+}
+
 /** 是否已选好待上传的文件夹（决定过滤区文案与目录树是否可用）。 */
 const hasFolder = computed(() => !!folderFiles.value?.length)
 
@@ -244,6 +253,36 @@ const filtered = computed(
   () => filterText.value !== '' || filterSource.value !== '' || filterState.value !== '',
 )
 
+const selectedVault = computed(
+  () => visibleVaults.value.find((vault) => vault.id === selectedVaultId.value) || visibleVaults.value[0] || null,
+)
+
+const selectedRun = computed(
+  () => selectedVault.value ? latestByVault.value[selectedVault.value.id] || null : null,
+)
+
+const selectedVaultIdForFiles = computed(() => selectedVault.value?.id ?? null)
+const {
+  files: vaultFileItems,
+  counts: vaultFileCounts,
+  total: vaultFileTotal,
+  page: vaultFilePage,
+  pageSize: vaultFilePageSize,
+  search: vaultFileSearch,
+  status: vaultFileStatus,
+  loading: vaultFilesLoading,
+  error: vaultFilesError,
+  scanComplete: vaultFilesScanComplete,
+  refresh: refreshVaultFiles,
+} = useVaultFiles(selectedVaultIdForFiles)
+
+watch(
+  [() => selectedRun.value?.id, () => selectedRun.value?.status],
+  () => {
+    if (selectedVault.value) refreshVaultFiles()
+  },
+)
+
 /* ---------- 添加 ---------- */
 
 function openAdd(type = 'local') {
@@ -264,8 +303,9 @@ function openAdd(type = 'local') {
  * （扫描途中换目录会得到自相矛盾的对账结果），与后端 409 同义，
  * 这里提前拦下，省一次往返。
  *
- * 流程与新建上传完全一致：选文件夹 → 调过滤（预填库上已保存的规则）→ 打包上传。
- * 被排除的目录/文件在打包阶段就被剔除，不会上传。
+ * 流程与新建上传完全一致：选文件夹 → 配过滤 → 打包上传，名称只读不可改。
+ * 过滤只作用于本次压缩（预填库上已保存规则作为起点），命中项在打包阶段就被剔除，
+ * 且**不写回**库上配置。
  */
 function openUpdate(v) {
   if (activeOf(v)) {
@@ -273,7 +313,7 @@ function openUpdate(v) {
     return
   }
   uploadTarget.value = v
-  // 预填库上已保存的规则：更新与新建用同一张表单，改完随文件一起保存
+  // 预填库上已保存的规则：与新建共用同一张表单，用户可在此基础上临时增删
   addForm.value = { type: 'uploaded', name: v.name, path: '', filters: filtersFromVault(v) }
   folderFiles.value = null
   packProgress.value = { done: 0, total: 0 }
@@ -379,12 +419,13 @@ async function startUpload() {
 }
 
 /**
- * 压缩 + 上传 + 落过滤：一次点击建库完成。
+ * 压缩 + 上传（新建时再落过滤）：一次点击完成。
  *
- * 过滤在上传前就在本地目录树里配好了，所以上传成功后顺手把过滤 PATCH 上去，
+ * 新建：过滤在上传前就在本地目录树里配好了，所以上传成功后顺手把过滤 PATCH 上去，
  * 不再要用户点第二次「保存过滤」。上传端点只认 name + zip（要先解压拿到 id 才能落库），
  * 这一步没法省；但两步失败要分清：PATCH 挂了不代表库没建成，提示去卡片重配即可。
- * 最后自动提交首个索引作业并跳任务页（见 autoSubmit）。
+ * 更新：过滤只作用于本次压缩，不写回库上配置。
+ * 最后自动提交索引作业并跳任务页（见 autoSubmit）。
  */
 async function doUpload() {
   packConfirmOpen.value = false
@@ -397,19 +438,12 @@ async function doUpload() {
   }
   try {
     if (target) {
-      // 更新：先整包替换（排除规则在打包阶段就生效），再落过滤，最后跑增量同步
-      // （prune 默认开启，新包删掉的文件会被清出索引）
+      // 更新：过滤只作用于本次压缩，不回写库上配置（用户明确要求），因此这里只打包 + 替换
       await updateVaultFiles(target, folderFiles.value, onProgress, addForm.value.filters)
       addOpen.value = false
-      try {
-        // 过滤随更新一起保存：用户在弹窗里改的规则要与本次上传的内容一致，
-        // 否则打包剔除了 A 而库上仍是旧规则，下次同步会把 A 又扫回来
-        await vaultsApi.update(target.id, { filters: filtersPayload(addForm.value.filters) })
-        toast.success('文件已更新，正在同步索引')
-      } catch (e) {
-        toast.warn(`文件已更新，但过滤未保存（${e.message}）；可在卡片上的「过滤设置」重配`)
-      }
+      toast.success('文件已更新，正在同步索引')
       await refresh()
+      await refreshVaultFiles()
       await autoSubmit(target.id)
       return
     }
@@ -455,6 +489,7 @@ async function submitEdit() {
     await vaultsApi.update(v.id, { name, filters: filtersPayload(editForm.value.filters) })
     editOpen.value = false
     await refresh()
+    await refreshVaultFiles()
     if (v.source_type === 'uploaded') {
       // 上传型卡片没有「同步」按钮（重扫看不到本机新文件），若不自动跑一次，
       // 新排除规则与 prune 永远不会落到索引上 —— 这里代跑一次增量同步。
@@ -563,193 +598,135 @@ async function doRemove() {
 
 /* ---------- 生命周期 ---------- */
 
-onMounted(() => {
-  setTopbarActions([
-    {
-      key: 'add',
-      comp: AppButton,
-      props: { variant: 'primary', icon: 'plus' },
-      on: { click: () => openAdd('local') },
-      text: '添加服务器目录',
-    },
-    {
-      key: 'upload',
-      comp: AppButton,
-      props: { variant: 'secondary', icon: 'upload' },
-      on: { click: () => openAdd('uploaded') },
-      text: '上传本机文件夹',
-    },
-  ])
-})
-
-onUnmounted(clearTopbarActions)
 </script>
 
 <template>
   <section class="vaults">
-    <header class="vaults__intro">
-      <h2 class="vaults__title">Vaults</h2>
-      <p class="vaults__desc">
+    <header class="page-intro">
+      <div>
+        <div class="eyebrow"><span class="eyebrow__dot"></span> YOUR KNOWLEDGE, IN ONE PLACE</div>
+        <h1>让笔记，成为可用的知识</h1>
+        <p>
         添加服务器上已有的目录（填绝对路径，就地索引，不复制文件），或上传你电脑上的文件夹
         （自动压缩后传到服务器）。建好后点「同步」建索引 —— 索引是后台作业，提交后会跳到任务页看进度。
-      </p>
+        </p>
+      </div>
+      <div class="vaults__intro-actions">
+        <AppButton variant="primary" icon="plus" @click="openAdd('local')">添加知识库</AppButton>
+        <AppButton variant="secondary" icon="upload" @click="openAdd('uploaded')">上传文件夹</AppButton>
+      </div>
     </header>
 
-    <div class="vaults__filters">
-      <AppInput
-        v-model="filterText"
-        class="vaults__search"
-        placeholder="搜索名称或路径"
-        aria-label="搜索 vault"
-      >
-        <template #prefix><AppIcon name="search" :size="16" /></template>
-      </AppInput>
-      <AppSelect
-        v-model="filterSource"
-        class="vaults__filter"
-        empty-label="全部来源"
-        :options="FILTER_SOURCE_OPTIONS"
-        aria-label="按来源类型筛选"
-      />
-      <AppSelect
-        v-model="filterState"
-        class="vaults__filter"
-        empty-label="全部状态"
-        :options="FILTER_STATE_OPTIONS"
-        aria-label="按状态筛选"
-      />
-      <span class="vaults__count">
-        共 {{ visibleVaults.length }} 个{{ filtered ? ` / 全部 ${vaults.length} 个` : '' }}
-      </span>
-    </div>
-
-    <p v-if="actionError" class="vaults__alert">
-      <AppIcon name="alert" :size="16" />
-      <span>{{ actionError }}</span>
-    </p>
-    <p v-if="error" class="vaults__alert">
-      <AppIcon name="alert" :size="16" />
-      <span>无法获取 vault 列表，请检查后端与鉴权设置。</span>
-    </p>
-
-    <div v-if="loading && !vaults.length" class="vaults__grid">
-      <AppCard v-for="i in 3" :key="i" padding="sm" class="vaults__card" loading />
-    </div>
-
-    <AppEmptyState
-      v-else-if="!vaults.length"
-      icon="folder"
-      title="还没有 vault"
-      description="添加服务器上已有的目录，或上传你电脑上的文件夹，即可开始索引。"
-      action-text="添加服务器目录"
-      action-icon="plus"
-      @action="openAdd('local')"
-    />
-
-    <AppEmptyState
-      v-else-if="!visibleVaults.length"
-      icon="search"
-      title="没有匹配的 vault"
-      description="试试放宽筛选条件。"
-    />
-
-    <!-- 卡片网格 -->
-    <div v-else class="vaults__grid">
-      <AppCard v-for="v in visibleVaults" :key="v.id" padding="sm" class="vaults__card">
-        <span class="vaults__card-head">
-          <span class="vaults__name" :title="v.name">{{ v.name }}</span>
-          <AppStatusBadge v-if="statusOf(v)" :status="statusOf(v)" size="sm" />
-          <span v-else class="vaults__idle">尚无作业</span>
-        </span>
-
-        <span class="vaults__meta">
-          <AppIcon :name="v.source_type === 'uploaded' ? 'upload' : 'folder'" :size="14" />
-          <span class="vaults__meta-text">{{ v.source_value }}</span>
-        </span>
-        <span class="vaults__meta">
-          <AppIcon name="models" :size="14" />
-          <span class="vaults__meta-text">
-            embed：{{ v.embed_profile_id ?? '未索引' }}
-            <template v-if="v.embed_indexed_profiles?.length">
-              · 已建过 [{{ v.embed_indexed_profiles.join(', ') }}]
-            </template>
+    <div class="vault-page-grid">
+      <div class="vault-main-column">
+        <div class="vaults__filters panel">
+          <AppInput
+            v-model="filterText"
+            class="vaults__search"
+            placeholder="搜索名称或路径"
+            aria-label="搜索知识库"
+          >
+            <template #prefix><AppIcon name="search" :size="16" /></template>
+          </AppInput>
+          <AppSelect
+            v-model="filterSource"
+            class="vaults__filter"
+            empty-label="全部来源"
+            :options="FILTER_SOURCE_OPTIONS"
+            aria-label="按来源类型筛选"
+          />
+          <AppSelect
+            v-model="filterState"
+            class="vaults__filter"
+            empty-label="全部状态"
+            :options="FILTER_STATE_OPTIONS"
+            aria-label="按状态筛选"
+          />
+          <span class="vaults__count">
+            共 {{ visibleVaults.length }} 个{{ filtered ? ` / 全部 ${vaults.length} 个` : '' }}
           </span>
-        </span>
-        <span class="vaults__meta">
-          <AppIcon name="clock" :size="14" />
-          <span class="vaults__meta-text">
-            上次索引：{{ relativeTime(v.indexed_at) || '—' }}
-          </span>
-        </span>
-        <span v-if="filterSummary(v)" class="vaults__meta">
-          <AppIcon name="filter" :size="14" />
-          <span class="vaults__meta-text">过滤：{{ filterSummary(v) }}</span>
-        </span>
+        </div>
 
-        <!-- 当前作业：内联进度 + 取消；点按跳到任务页看详情 -->
-        <div v-if="activeOf(v)" class="vaults__active">
-          <AppProgress :run="activeOf(v)" compact />
-          <div class="vaults__active-actions">
-            <AppButton
-              variant="ghost"
-              size="sm"
-              :disabled="!!activeOf(v).cancelling"
-              @click="onCancel(activeOf(v))"
-            >
-              {{ activeOf(v).cancelling ? '正在停止…' : '取消' }}
-            </AppButton>
-            <AppButton
-              variant="ghost"
-              size="sm"
-              icon-right="chevron-right"
-              @click="goTasks(v.id, { run_id: activeOf(v).id })"
-            >
-              查看
-            </AppButton>
+        <p v-if="actionError" class="vaults__alert">
+          <AppIcon name="alert" :size="16" />
+          <span>{{ actionError }}</span>
+        </p>
+        <p v-if="error" class="vaults__alert">
+          <AppIcon name="alert" :size="16" />
+          <span>无法获取知识库列表，请检查后端与鉴权设置。</span>
+        </p>
+
+        <div v-if="loading && !vaults.length" class="vaults__grid">
+          <AppCard v-for="i in 3" :key="i" padding="sm" class="vaults__card" loading />
+        </div>
+
+        <AppEmptyState
+          v-else-if="!vaults.length"
+          icon="folder"
+          title="还没有知识库"
+          description="添加服务器上已有的目录，或上传你电脑上的文件夹，即可开始索引。"
+          action-text="添加知识库"
+          action-icon="plus"
+          @action="openAdd('local')"
+        />
+
+        <AppEmptyState
+          v-else-if="!visibleVaults.length"
+          icon="search"
+          title="没有匹配的知识库"
+          description="试试放宽筛选条件。"
+        />
+
+        <div v-else class="vault-list">
+          <div class="vault-list__heading">
+            <h2>我的知识库</h2>
+            <span>{{ visibleVaults.length }} 个 Vault</span>
+          </div>
+          <div class="vault-cards">
+            <VaultCard
+              v-for="v in visibleVaults"
+              :key="v.id"
+              :vault="v"
+              :selected="selectedVault?.id === v.id"
+              :run="latestByVault[v.id]"
+              @select="selectedVaultId = $event"
+            />
           </div>
         </div>
 
-        <template #footer>
-          <span class="vaults__actions">
-            <!-- 上传型库的文件只存在于服务端副本，重扫不会发现任何新内容 —— 入口必须是「重新上传」 -->
-            <AppButton
-              v-if="v.source_type === 'uploaded'"
-              variant="secondary"
-              size="sm"
-              icon="upload"
-              title="重新上传文件夹：整包替换服务端副本，并自动同步索引"
-              @click="openUpdate(v)"
-            >
-              更新文件
-            </AppButton>
-            <template v-else>
-              <AppButton variant="secondary" size="sm" icon="refresh" @click="submit(v.id, { mode: 'sync' })">
-                同步
-              </AppButton>
-              <AppButton variant="secondary" size="sm" @click="submit(v.id, { mode: 'sync', dry_run: true })">
-                预览变更
-              </AppButton>
-            </template>
-            <AppButton variant="secondary" size="sm" icon="zap" @click="reindex(v.id)">
-              重建索引
-            </AppButton>
-            <AppButton variant="secondary" size="sm" icon="filter" @click="openEdit(v)">
-              过滤设置
-            </AppButton>
-            <AppButton variant="danger" size="sm" icon="trash" @click="askRemove(v)">
-              删除
-            </AppButton>
-          </span>
-        </template>
-      </AppCard>
-
-      <!-- 新建入口卡 -->
-      <AppCard padding="sm" interactive class="vaults__card vaults__card-new" @click="openAdd('local')">
-        <span class="vaults__new">
-          <AppIcon name="plus" :size="24" />
-          <span>新建</span>
-        </span>
-      </AppCard>
+        <VaultFilesPanel
+          v-if="selectedVault"
+          :vault="selectedVault"
+          :files="vaultFileItems"
+          :counts="vaultFileCounts"
+          :total="vaultFileTotal"
+          :page="vaultFilePage"
+          :page-size="vaultFilePageSize"
+          :search="vaultFileSearch"
+          :status="vaultFileStatus"
+          :loading="vaultFilesLoading"
+          :error="vaultFilesError"
+          :scan-complete="vaultFilesScanComplete"
+          :run="selectedRun"
+          :active-run="activeOf(selectedVault)"
+          :filter-summary="filterSummary(selectedVault)"
+          :embed-summary="embedSummary(selectedVault)"
+          @update:search="vaultFileSearch = $event; vaultFilePage = 1"
+          @update:status="vaultFileStatus = $event; vaultFilePage = 1"
+          @change-page="vaultFilePage = $event"
+          @sync="submit(selectedVault.id, { mode: 'sync' })"
+          @preview="submit(selectedVault.id, { mode: 'sync', dry_run: true })"
+          @rebuild="reindex(selectedVault.id)"
+          @edit-filters="openEdit"
+          @remove="askRemove"
+          @update-files="openUpdate"
+          @refresh="refreshVaultFiles"
+        />
+        <section v-if="selectedVault" class="privacy-card">
+          <span class="privacy-card__mark"><AppIcon name="info" :size="17" /></span>
+          <div><strong>文件保持在原位置</strong><p>服务器目录直接索引；上传文件夹保留在服务器副本中。</p></div>
+        </section>
+      </div>
     </div>
 
     <!-- 添加 / 上传 / 更新（同一张表单，来源类型由入口决定，弹窗内不再选） -->
@@ -757,14 +734,14 @@ onUnmounted(clearTopbarActions)
     <AppModal v-model="addOpen" :title="addTitle" :width="880">
       <div class="vaults__form">
         <AppInput
-          v-if="!uploadTarget"
           v-model="addForm.name"
           label="名称"
           required
+          :disabled="!!uploadTarget"
+          :hint="uploadTarget ? '更新时名称不可修改' : ''"
           placeholder="例如 notes"
         />
-        <p v-else class="vaults__section">
-          {{ uploadTarget.name }}
+        <p v-if="uploadTarget" class="vaults__section">
           <span class="vaults__section-hint">
             整包替换：新文件夹会覆盖服务端现有文件，已删除的文件在同步后从索引移除
           </span>
@@ -783,7 +760,7 @@ onUnmounted(clearTopbarActions)
           v-else
           label="待上传的文件夹"
           required
-          hint="选的是你电脑上的文件夹，会自动压缩后上传，不必自己先打包"
+          hint="选的是你电脑上的文件夹，会自动压缩后上传，不必自己先打包；`. 开头`的目录服务端不扫描，打包时会自动剔除（`. 开头`的文件照常上传）"
         >
           <span class="vaults__file">
             <AppButton variant="secondary" icon="upload" :disabled="addSaving" @click="pickFolder">
@@ -803,14 +780,16 @@ onUnmounted(clearTopbarActions)
         />
 
         <!-- 文件过滤：服务器目录填好路径即可配；上传/更新选好文件夹即可（本地树，不必等解压）。
-             更新与新建共用同一张表单：规则预填库上已保存的配置，改完随文件一起保存。 -->
+             过滤只作用于**本次打包**：命中项不进 zip。更新时规则不写回库上配置。 -->
         <p class="vaults__section">
           文件过滤
           <span class="vaults__section-hint">
             {{
-              addForm.type === 'uploaded' && !hasFolder
-                ? '已默认排除 Obsidian 相关目录；选好文件夹后即可在这里浏览它的目录并勾选要排除的'
-                : '已默认排除 Obsidian 相关目录；排除之外的文件都会索引（服务端默认收 md / txt）'
+              uploadTarget
+                ? '仅对本次压缩生效，不会保存到知识库；已预填库上原有规则，可随本次上传临时调整'
+                : addForm.type === 'uploaded' && !hasFolder
+                  ? '已默认排除 Obsidian 相关目录；选好文件夹后即可在这里浏览它的目录并勾选要排除的'
+                  : '已默认排除 Obsidian 相关目录；排除之外的文件都会索引（服务端默认收 md / txt）'
             }}
           </span>
         </p>
@@ -948,71 +927,6 @@ onUnmounted(clearTopbarActions)
   min-width: 0;
 }
 
-.vaults__card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.vaults__name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-primary);
-  font-size: var(--font-size-h2);
-  line-height: var(--line-height-h2);
-  font-weight: var(--font-weight-semibold);
-}
-
-.vaults__idle {
-  flex: none;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-sm);
-}
-
-.vaults__meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-sm);
-}
-
-.vaults__meta-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.vaults__active {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding-top: var(--space-1);
-  border-top: var(--border-width) solid var(--color-border);
-}
-
-.vaults__active-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-1);
-}
-
-.vaults__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  width: 100%;
-}
-
 .vaults__card-new {
   display: flex;
   align-items: center;
@@ -1099,6 +1013,136 @@ onUnmounted(clearTopbarActions)
   }
   .vaults__count {
     margin-left: 0;
+  }
+}
+
+.vault-page-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.vault-main-column {
+  display: grid;
+  gap: 15px;
+  min-width: 0;
+}
+
+.vaults__intro-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vaults__filters {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(115px, 150px) minmax(105px, 140px) auto;
+  gap: 9px;
+  padding: 12px;
+}
+
+.vaults__filters .vaults__search {
+  width: 100%;
+}
+
+.vaults__filter {
+  width: auto;
+}
+
+.vaults__count {
+  align-self: center;
+  margin-left: 0;
+  color: var(--ui-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.vault-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 260px);
+  gap: 10px;
+}
+
+.vault-list__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 11px;
+}
+
+.vault-list__heading h2 {
+  color: var(--ui-ink);
+  font-size: 14px;
+}
+
+.vault-list__heading > span {
+  padding: 4px 8px;
+  color: var(--ui-muted);
+  background: var(--ui-surface-soft);
+  border-radius: 999px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.privacy-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px;
+  background: var(--ui-surface-soft);
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
+}
+
+.privacy-card__mark {
+  color: var(--ui-success);
+}
+
+.privacy-card strong {
+  color: var(--ui-ink);
+  font-size: 10px;
+}
+
+.privacy-card p {
+  margin-top: 3px;
+  color: var(--ui-muted);
+  font-size: 9px;
+  line-height: 14px;
+}
+
+@media (max-width: 980px) {
+  .vault-page-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+}
+
+@media (max-width: 650px) {
+  .vaults__intro-actions {
+    width: 100%;
+  }
+
+  .vaults__intro-actions > :deep(button) {
+    flex: 1;
+  }
+
+  .vaults__filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vaults__filters .vaults__search {
+    grid-column: 1 / -1;
+  }
+
+  .vaults__count {
+    grid-column: 1 / -1;
+  }
+
+  .vault-cards {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

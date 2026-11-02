@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import settings
 from app.models import Base
+from app.rag.bm25 import ensure_index as ensure_bm25_index
 
 _engine: Optional[AsyncEngine] = None
 _async_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
@@ -112,6 +113,7 @@ async def init_db() -> None:
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_image_cache_columns(conn)
+        await ensure_bm25_index(conn)
 
 
 # image_cache 的增量列：create_all **不会**给已存在的表加列，而本项目没有迁移框架

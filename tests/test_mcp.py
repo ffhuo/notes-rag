@@ -267,6 +267,8 @@ async def test_search_notes_maps_hits_to_plain_dicts(db, monkeypatch, tmp_path):
     root.mkdir()
     await _make_vault(root=root)
     raw = await _make_key("u1")
+    rerank_runtime = object()
+    received = {}
 
     async def fake_embed(session, user_id, vault):
         return None, 7
@@ -274,6 +276,7 @@ async def test_search_notes_maps_hits_to_plain_dicts(db, monkeypatch, tmp_path):
     async def fake_retrieve(query, **kwargs):
         from app.models.schemas import ChunkHit
 
+        received["rerank_runtime"] = kwargs.get("rerank_runtime")
         return [
             ChunkHit(
                 note_id="1",
@@ -281,20 +284,36 @@ async def test_search_notes_maps_hits_to_plain_dicts(db, monkeypatch, tmp_path):
                 title="A",
                 content="片段内容",
                 score=0.8712,
+                rerank_score=0.95,
                 images=[],
             )
         ]
 
     monkeypatch.setattr("app.mcp.server.resolve_embed_runtime", fake_embed)
+    async def fake_resolve_rerank(session, user_id):
+        return rerank_runtime
+
+    monkeypatch.setattr(
+        "app.mcp.server.model_service.resolve_rerank_runtime",
+        fake_resolve_rerank,
+    )
     monkeypatch.setattr("app.mcp.server.retrieval_service.retrieve", fake_retrieve)
 
     async with _session(headers={"X-API-Key": raw}) as s:
         res = await s.call_tool("search_notes", {"query": "片段"})
 
     assert not res.is_error
+    assert received["rerank_runtime"] is rerank_runtime
     hits = _payload(res)
     assert hits == [
-        {"file_path": "a.md", "title": "A", "content": "片段内容", "score": 0.8712, "vault_id": 1}
+        {
+            "file_path": "a.md",
+            "title": "A",
+            "content": "片段内容",
+            "score": 0.8712,
+            "rerank_score": 0.95,
+            "vault_id": 1,
+        }
     ]
 
 

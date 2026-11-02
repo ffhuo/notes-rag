@@ -8,8 +8,8 @@
 
 主要函数：
 - async def stream(query, *, session, user_id, conversation_id, top_k, vault_id,
-                   embed_runtime, llm_runtime) -> AsyncIterator[dict]: 流式事件生成器
-      embed_runtime 按 vault.embed_profile_id 解析并经兼容性守卫（检索侧绑定）；
+                   embed_runtime, retrieval_scopes, llm_runtime) -> AsyncIterator[dict]: 流式事件生成器
+      单 vault 使用 vault.embed_profile_id；全部 vault 使用各自 profile 检索并按名次融合；
       llm_runtime 由 model_service.resolve_profile(kind='llm', ref=request.llm_profile) 解析
 
 事件约定：
@@ -29,6 +29,7 @@ from app.models.schemas import ModelRuntime
 from app.rag import llm_client
 from app.repositories import conversation_repo
 from app.services import retrieval_service
+from app.services.retrieval_service import VaultRetrievalScope
 
 # 拼接历史时最多带入的历史消息条数（user+assistant 合计），避免上下文无限膨胀
 _HISTORY_LIMIT = 10
@@ -46,6 +47,9 @@ def _build_context(hits: list) -> str:
     blocks = []
     for i, hit in enumerate(hits, start=1):
         source = getattr(hit, "file_path", "") or getattr(hit, "title", "")
+        vault_name = getattr(hit, "vault_name", None)
+        if vault_name:
+            source = f"{vault_name} · {source}"
         blocks.append(f"[{i}] 来源：{source}\n{hit.content}")
     return "\n\n".join(blocks)
 
@@ -60,7 +64,9 @@ async def stream(
     vault_id: int | None = None,
     embed_runtime: ModelRuntime | None = None,
     embed_profile_id: int | str | None = None,
+    retrieval_scopes: list[VaultRetrievalScope] | None = None,
     llm_runtime: ModelRuntime | None = None,
+    rerank_runtime: ModelRuntime | None = None,
 ) -> AsyncIterator[dict]:
     """RAG 问答流式事件生成器。
 
@@ -73,6 +79,7 @@ async def stream(
         vault_id: 限定检索的 vault
         embed_runtime: 检索用 embedding 运行时（须与建索引模型一致）
         llm_runtime: 生成用 LLM 运行时
+        rerank_runtime: 可选 rerank 运行时，未配置时保持向量排序
 
     Yields:
         SSE 事件 dict：sources / token / done / error
@@ -94,13 +101,22 @@ async def stream(
             history = await conversation_repo.get_history(session, conversation_id)
 
         # 2) 检索
-        hits = await retrieval_service.retrieve(
-            query,
-            top_k=top_k,
-            vault_id=vault_id,
-            embed_profile_id=embed_profile_id,
-            embed_runtime=embed_runtime,
-        )
+        if retrieval_scopes is not None:
+            hits = await retrieval_service.retrieve_across_vaults(
+                query,
+                scopes=retrieval_scopes,
+                top_k=top_k,
+                rerank_runtime=rerank_runtime,
+            )
+        else:
+            hits = await retrieval_service.retrieve(
+                query,
+                top_k=top_k,
+                vault_id=vault_id,
+                embed_profile_id=embed_profile_id,
+                embed_runtime=embed_runtime,
+                rerank_runtime=rerank_runtime,
+            )
 
         # 按检索命中组装来源：字段与 ChunkHit 对齐（含 content），
         # 前端「来源」展开要显示片段原文；漏掉 content 会让展开后一片空白
@@ -111,6 +127,12 @@ async def stream(
                 "title": h.title,
                 "content": h.content,
                 "score": h.score,
+                "bm25_score": h.bm25_score,
+                "vector_recalled": h.vector_recalled,
+                "rerank_score": h.rerank_score,
+                "vault_id": h.vault_id,
+                "vault_name": h.vault_name,
+                "fusion_score": h.fusion_score,
                 "images": h.images,
             }
             for h in hits
